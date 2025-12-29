@@ -2211,7 +2211,7 @@ pub fn list(locs: Vec<&Path>, config: &Config) -> UResult<()> {
 /// O(n) swaps in the worst case, where n is the slice length.
 fn apply_permutation<T>(slice: &mut [T], perm: &[usize]) {
     let mut perm = perm.to_vec(); // Make mutable copy of permutation
-    
+
     for i in 0..slice.len() {
         // Keep swapping until the correct element is at position i
         while perm[i] != i {
@@ -2281,8 +2281,7 @@ fn sort_entries(entries: &mut [PathData], config: &Config) {
                 if p.must_dereference {
                     p.file_type().is_some_and(|ft| ft.is_dir())
                 } else {
-                    get_metadata_with_deref_opt(p.p_buf.as_path(), true)
-                        .is_ok_and(|m| m.is_dir())
+                    get_metadata_with_deref_opt(p.p_buf.as_path(), true).is_ok_and(|m| m.is_dir())
                 }
             };
             if is_dir {
@@ -2294,7 +2293,14 @@ fn sort_entries(entries: &mut [PathData], config: &Config) {
         if !(dir_indices.is_empty() || file_indices.is_empty()) {
             let mut new_order = dir_indices;
             new_order.extend(file_indices);
-            apply_permutation(entries, &new_order);
+            // new_order[dst] = src means position dst should get element from src.
+            // apply_permutation expects perm[src] = dst (element at src goes to dst).
+            // These are inverse permutations, so compute the inverse.
+            let mut inverse = vec![0usize; entries.len()];
+            for (dst, &src) in new_order.iter().enumerate() {
+                inverse[src] = dst;
+            }
+            apply_permutation(entries, &inverse);
         }
     }
 }
