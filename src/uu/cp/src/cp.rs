@@ -1159,6 +1159,23 @@ impl Options {
             None
         };
 
+        // Check for mutually exclusive SELinux options
+        // --preserve=context cannot be combined with -Z or --context
+        let preserve_context_required =
+            matches!(attributes.context, Preserve::Yes { required: true });
+        if preserve_context_required {
+            if set_selinux_context {
+                return Err(CpError::Error(
+                    translate!("cp-error-selinux-mutually-exclusive", "option" => "-Z"),
+                ));
+            }
+            if context.is_some() {
+                return Err(CpError::Error(
+                    translate!("cp-error-selinux-mutually-exclusive", "option" => "--context"),
+                ));
+            }
+        }
+
         let options = Self {
             attributes_only: matches.get_flag(options::ATTRIBUTES_ONLY),
             copy_contents: matches.get_flag(options::COPY_CONTENTS),
