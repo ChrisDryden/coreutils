@@ -1359,9 +1359,8 @@ fn show_error_if_needed(error: &CpError) {
         // corresponding diagnostic."
         #[cfg(unix)]
         CpError::IoErr(e) if e.raw_os_error() == Some(libc::ENOTSUP) => {}
-        // Suppress SELinux ENOTSUP errors when context preservation is not required
-        #[cfg(all(unix, feature = "selinux"))]
-        CpError::SelinuxEnotsup(_, _) => {}
+        // Note: SelinuxEnotsup is NOT suppressed here - it's handled specially
+        // in handle_preserve based on whether context preservation is required
         _ => {
             show_error!("{error}");
         }
@@ -1671,6 +1670,13 @@ fn handle_preserve<F: Fn() -> CopyResult<()>>(p: &Preserve, f: F) -> CopyResult<
             if *required {
                 result?;
             } else if let Err(error) = result {
+                // Silently suppress SelinuxEnotsup when context is not required
+                // Per GNU cp: "Try to preserve SELinux security context... but ignore
+                // any failure to do that and print no corresponding diagnostic."
+                #[cfg(all(unix, feature = "selinux"))]
+                if matches!(error, CpError::SelinuxEnotsup(_, _)) {
+                    return Ok(());
+                }
                 show_error_if_needed(&error);
             }
         }
