@@ -1,5 +1,5 @@
 #!/bin/bash
-# Run GNU SMACK tests in QEMU with SMACK-enabled kernel
+# Run GNU SMACK/ROOTFS tests in QEMU with SMACK-enabled kernel
 # Usage: run-gnu-tests-smack-ci.sh [GNU_DIR] [OUTPUT_DIR]
 # spell-checker:ignore rootfs zstd unzstd cpio newc nographic smackfs devtmpfs tmpfs poweroff libm libgcc libpthread libdl librt sysfs rwxat setuidgid
 set -e
@@ -10,7 +10,7 @@ GNU_DIR="${1:-$REPO_DIR/../gnu}"
 OUTPUT_DIR="${2:-$REPO_DIR/target/smack-test-results}"
 SMACK_DIR="$REPO_DIR/target/smack-test"
 
-echo "Setting up SMACK test environment..."
+echo "Setting up SMACK/ROOTFS test environment..."
 rm -rf "$SMACK_DIR"
 mkdir -p "$SMACK_DIR"/{rootfs/{bin,lib64,proc,sys,dev,tmp,etc,gnu},kernel}
 
@@ -75,15 +75,15 @@ poweroff -f
 INIT
 chmod +x "$SMACK_DIR/rootfs/init"
 
-# Build utilities with SMACK support
-echo "Building utilities with SMACK support..."
-cargo build --release --manifest-path="$REPO_DIR/Cargo.toml" --package uu_id --features uu_id/smack --package uu_ls --features uu_ls/smack --package uu_mkdir --features uu_mkdir/smack --package uu_mkfifo --features uu_mkfifo/smack --package uu_mknod --features uu_mknod/smack
+# Build utilities for SMACK/ROOTFS tests
+echo "Building utilities for SMACK/ROOTFS tests..."
+cargo build --release --manifest-path="$REPO_DIR/Cargo.toml" --package uu_id --features uu_id/smack --package uu_ls --features uu_ls/smack --package uu_mkdir --features uu_mkdir/smack --package uu_mkfifo --features uu_mkfifo/smack --package uu_mknod --features uu_mknod/smack --package uu_df
 
-# Find SMACK tests
-SMACK_TESTS=$(grep -l 'require_smack_' -r "$GNU_DIR/tests/" 2>/dev/null || true)
-[ -z "$SMACK_TESTS" ] && { echo "No SMACK tests found"; exit 0; }
+# Find SMACK tests and tests requiring rootfs in mtab (only available in QEMU environment)
+SMACK_TESTS=$(grep -l -E 'require_smack_|rootfs in mtab' -r "$GNU_DIR/tests/" 2>/dev/null | sort -u || true)
+[ -z "$SMACK_TESTS" ] && { echo "No SMACK/rootfs tests found"; exit 0; }
 
-echo "Found $(echo "$SMACK_TESTS" | wc -l) SMACK tests"
+echo "Found $(echo "$SMACK_TESTS" | wc -l) SMACK/rootfs tests"
 
 # Create output directory
 rm -rf "$OUTPUT_DIR"
@@ -108,8 +108,8 @@ for TEST_PATH in $SMACK_TESTS; do
     rm -rf "$WORK" "$WORK.gz"
     cp -a "$SMACK_DIR/rootfs" "$WORK"
 
-    # Copy built utilities with SMACK support
-    for U in id ls mkdir mkfifo mknod; do
+    # Copy built utilities for SMACK/ROOTFS tests
+    for U in id ls mkdir mkfifo mknod df; do
         rm -f "$WORK/bin/$U"
         cp "$REPO_DIR/target/release/$U" "$WORK/bin/$U"
     done
