@@ -1794,21 +1794,24 @@ pub(crate) fn copy_attributes(
 
     #[cfg(feature = "selinux")]
     handle_preserve(&attributes.context, || -> CopyResult<()> {
+        use std::error::Error as StdError;
         // Get the source context and apply it to the destination
         if let Ok(context) = selinux::SecurityContext::of_path(source, false, false) {
             if let Some(context) = context {
                 if let Err(e) = context.set_for_path(dest, false, false) {
                     // Check if the underlying error is ENOTSUP
-                    // The selinux crate wraps io::Error, so we can extract it
-                    if let Some(io_err) = e.io_source() {
-                        if io_err.raw_os_error() == Some(libc::ENOTSUP) {
-                            // Return SelinuxEnotsup so show_error_if_needed can suppress it
-                            // when context preservation is not required, but still show
-                            // proper error message when it is required
-                            return Err(CpError::SelinuxEnotsup(
-                                dest.to_path_buf(),
-                                e.to_string(),
-                            ));
+                    // The selinux crate wraps io::Error, use std::error::Error::source()
+                    if let Some(source_err) = e.source() {
+                        if let Some(io_err) = source_err.downcast_ref::<std::io::Error>() {
+                            if io_err.raw_os_error() == Some(libc::ENOTSUP) {
+                                // Return SelinuxEnotsup so show_error_if_needed can suppress it
+                                // when context preservation is not required, but still show
+                                // proper error message when it is required
+                                return Err(CpError::SelinuxEnotsup(
+                                    dest.to_path_buf(),
+                                    e.to_string(),
+                                ));
+                            }
                         }
                     }
                     return Err(CpError::Error(
