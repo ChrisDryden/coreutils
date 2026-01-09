@@ -1328,6 +1328,12 @@ fn show_error_if_needed(error: &CpError) {
             // touch a b && echo "n"|cp -i a b && echo $?
             // should return an error from GNU 9.2
         }
+        // Silently suppress ENOTSUP errors from xattr/SELinux operations.
+        // Per GNU cp docs: "Try to preserve SELinux security context and extended
+        // attributes (xattr), but ignore any failure to do that and print no
+        // corresponding diagnostic."
+        #[cfg(unix)]
+        CpError::IoErr(e) if e.raw_os_error() == Some(libc::ENOTSUP) => {}
         _ => {
             show_error!("{error}");
         }
@@ -2555,12 +2561,17 @@ fn copy_file(
     #[cfg(feature = "selinux")]
     if options.set_selinux_context && uucore::selinux::is_selinux_enabled() {
         // Set the given selinux permissions on the copied file.
+        // Per GNU cp behavior, ENOTSUP errors are silently suppressed for -Z operations.
+        // The test comment says: "the resulting ENOTSUP warning will be suppressed"
         if let Err(e) =
             uucore::selinux::set_selinux_security_context(dest, options.context.as_ref())
         {
-            return Err(CpError::Error(
-                translate!("cp-error-selinux-error", "error" => e),
-            ));
+            let error_str = e.to_string().to_lowercase();
+            if !error_str.contains("not supported") {
+                return Err(CpError::Error(
+                    translate!("cp-error-selinux-error", "error" => e),
+                ));
+            }
         }
     }
 
