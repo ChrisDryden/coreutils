@@ -94,7 +94,8 @@ ln -vf "${UU_BUILD_DIR}/install" "${UU_BUILD_DIR}/ginstall" # The GNU tests use 
 if [ "${SELINUX_ENABLED}" = 1 ];then
     # Build few utils for SELinux for faster build. MULTICALL=y fails...
     # dd is needed for tests like cp-a-selinux.sh that create filesystem images
-    "${MAKE}" UTILS="cat chcon cp cut dd echo env groups id ln ls mkdir mkfifo mknod mktemp mv printf rm rmdir runcon stat test touch tr true uname wc whoami"
+    # realpath is needed by cp-a-selinux.sh for resolving absolute paths
+    "${MAKE}" UTILS="cat chcon cp cut dd echo env groups id ln ls mkdir mkfifo mknod mktemp mv printf realpath rm rmdir runcon stat test touch tr true uname wc whoami"
 else
     # Use MULTICALL=y for faster build
     "${MAKE}" MULTICALL=y SKIP_UTILS="install more seq"
