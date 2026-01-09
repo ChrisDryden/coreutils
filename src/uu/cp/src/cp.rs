@@ -2633,8 +2633,32 @@ fn copy_file(
         if let Err(e) =
             uucore::selinux::set_selinux_security_context(dest, options.context.as_ref())
         {
+            // Check if this is an ENOTSUP error that should be suppressed
+            // First try string matching, then check source chain for io::Error with ENOTSUP
             let error_str = e.to_string().to_lowercase();
-            if !error_str.contains("not supported") {
+            let is_enotsup = error_str.contains("not supported")
+                || error_str.contains("operation not permitted")
+                || {
+                    use std::error::Error as StdError;
+                    let mut err: &dyn StdError = &e;
+                    let mut found = false;
+                    // Walk the error chain looking for io::Error with ENOTSUP
+                    loop {
+                        if let Some(io_err) = err.downcast_ref::<std::io::Error>() {
+                            if io_err.raw_os_error() == Some(libc::ENOTSUP) {
+                                found = true;
+                                break;
+                            }
+                        }
+                        match err.source() {
+                            Some(source) => err = source,
+                            None => break,
+                        }
+                    }
+                    found
+                };
+
+            if !is_enotsup {
                 return Err(CpError::Error(
                     translate!("cp-error-selinux-error", "error" => e),
                 ));
