@@ -86,6 +86,14 @@ pub enum CpError {
     #[error("{0}")]
     InvalidArgument(String),
 
+    /// SELinux ENOTSUP error - the operation is not supported on this filesystem
+    /// This is separate from IoErr so we can suppress it when context preservation
+    /// is not required (e.g., with -a) while still showing proper error message
+    /// when it is required (e.g., with --preserve=context)
+    #[cfg(all(unix, feature = "selinux"))]
+    #[error("{}", translate!("cp-error-selinux-set-context", "path" => .0.quote(), "error" => .1))]
+    SelinuxEnotsup(std::path::PathBuf, String),
+
     /// All standard options are included as an implementation
     /// path, but those that are not implemented yet should return
     /// a `NotImplemented` error.
@@ -1351,6 +1359,9 @@ fn show_error_if_needed(error: &CpError) {
         // corresponding diagnostic."
         #[cfg(unix)]
         CpError::IoErr(e) if e.raw_os_error() == Some(libc::ENOTSUP) => {}
+        // Suppress SELinux ENOTSUP errors when context preservation is not required
+        #[cfg(all(unix, feature = "selinux"))]
+        CpError::SelinuxEnotsup(_, _) => {}
         _ => {
             show_error!("{error}");
         }
@@ -1787,6 +1798,19 @@ pub(crate) fn copy_attributes(
         if let Ok(context) = selinux::SecurityContext::of_path(source, false, false) {
             if let Some(context) = context {
                 if let Err(e) = context.set_for_path(dest, false, false) {
+                    // Check if the underlying error is ENOTSUP
+                    // The selinux crate wraps io::Error, so we can extract it
+                    if let Some(io_err) = e.io_source() {
+                        if io_err.raw_os_error() == Some(libc::ENOTSUP) {
+                            // Return SelinuxEnotsup so show_error_if_needed can suppress it
+                            // when context preservation is not required, but still show
+                            // proper error message when it is required
+                            return Err(CpError::SelinuxEnotsup(
+                                dest.to_path_buf(),
+                                e.to_string(),
+                            ));
+                        }
+                    }
                     return Err(CpError::Error(
                         translate!("cp-error-selinux-set-context", "path" => dest.quote(), "error" => e),
                     ));
