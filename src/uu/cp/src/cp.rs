@@ -1460,7 +1460,22 @@ pub fn copy(sources: &[PathBuf], target: &Path, options: &Options) -> CopyResult
                 &mut created_parent_dirs,
             ) {
                 show_error_if_needed(&error);
-                if !matches!(error, CpError::Skipped(false)) {
+                // Don't count suppressed errors (ENOTSUP, Skipped(false)) as failures
+                let is_suppressed_error = matches!(error, CpError::Skipped(false))
+                    || {
+                        #[cfg(unix)]
+                        {
+                            matches!(&error, CpError::IoErr(e) if e.raw_os_error() == Some(libc::ENOTSUP))
+                        }
+                        #[cfg(not(unix))]
+                        {
+                            false
+                        }
+                    };
+                #[cfg(all(unix, feature = "selinux"))]
+                let is_suppressed_error =
+                    is_suppressed_error || matches!(error, CpError::SelinuxEnotsup(_, _));
+                if !is_suppressed_error {
                     non_fatal_errors = true;
                 }
             } else {
