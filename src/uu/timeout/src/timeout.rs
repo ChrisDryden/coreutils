@@ -197,14 +197,17 @@ fn unblock_sigchld() {
 
 /// We should terminate child process when receiving termination signals.
 static SIGNALED: AtomicBool = AtomicBool::new(false);
+/// Track which signal was received (0 = none/timeout expired naturally).
+static RECEIVED_SIGNAL: std::sync::atomic::AtomicI32 = std::sync::atomic::AtomicI32::new(0);
 
 /// Install signal handlers for all termination signals.
 /// This matches GNU coreutils behavior from term-sig.h.
 fn install_signal_handlers(term_signal: usize) {
     use nix::sys::signal::{SigHandler, Signal};
 
-    extern "C" fn handle_signal(_: libc::c_int) {
+    extern "C" fn handle_signal(sig: libc::c_int) {
         SIGNALED.store(true, atomic::Ordering::Relaxed);
+        RECEIVED_SIGNAL.store(sig, atomic::Ordering::Relaxed);
     }
 
     let handler = SigHandler::Handler(handle_signal);
@@ -239,7 +242,12 @@ fn report_if_verbose(signal: usize, cmd: &str, verbose: bool) {
             signal_name_by_value(signal).unwrap().to_string()
         };
         // Use writeln to stderr to avoid SIGPIPE issues with show_error!
-        let _ = writeln!(std::io::stderr(), "timeout: sending signal {} to command {}", s, cmd.quote());
+        let _ = writeln!(
+            std::io::stderr(),
+            "timeout: sending signal {} to command {}",
+            s,
+            cmd.quote()
+        );
     }
 }
 
@@ -414,12 +422,25 @@ fn timeout(
             .unwrap_or_else(|| preserve_signal_info(status.signal().unwrap()))
             .into()),
         Ok(None) => {
-            report_if_verbose(signal, &cmd[0], verbose);
-            send_signal(process, signal, foreground);
+            // Check if we received an external signal vs natural timeout
+            // If we received an external signal, forward that signal to the child
+            // SIGALRM is treated as timeout expiry (sends configured signal)
+            let received_sig = RECEIVED_SIGNAL.load(atomic::Ordering::Relaxed);
+            let signal_to_send = if received_sig > 0 && received_sig != libc::SIGALRM {
+                received_sig as usize
+            } else {
+                signal
+            };
+
+            report_if_verbose(signal_to_send, &cmd[0], verbose);
+            send_signal(process, signal_to_send, foreground);
             match kill_after {
                 None => {
                     let status = process.wait()?;
-                    if SIGNALED.load(atomic::Ordering::Relaxed) {
+                    // If we received an external signal (not SIGALRM), exit with signal code
+                    if received_sig > 0 && received_sig != libc::SIGALRM {
+                        Err(ExitStatus::SignalSent(received_sig as usize).into())
+                    } else if SIGNALED.load(atomic::Ordering::Relaxed) {
                         Err(ExitStatus::CommandTimedOut.into())
                     } else if preserve_status {
                         if let Some(ec) = status.code() {
