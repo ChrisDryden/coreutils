@@ -383,22 +383,10 @@ fn timeout(
 
         unsafe {
             cmd_builder.pre_exec(move || {
-                // Reset termination signals to default.
-                // This is critical because when a process is backgrounded,
-                // shells may set SIGINT/SIGQUIT to SIG_IGN. Children inherit
-                // this and cannot trap these signals unless we reset them.
-                // GNU coreutils timeout does this as well.
-                for sig in [
-                    NixSignal::SIGINT,
-                    NixSignal::SIGQUIT,
-                    NixSignal::SIGTERM,
-                    NixSignal::SIGHUP,
-                    NixSignal::SIGALRM,
-                    NixSignal::SIGUSR1,
-                    NixSignal::SIGUSR2,
-                ] {
-                    let _ = nix::sys::signal::signal(sig, SigHandler::SigDfl);
-                }
+                // exec doesn't reset SIG_IGN -> SIG_DFL, so we do it manually.
+                // GNU coreutils timeout only resets SIGTTIN and SIGTTOU.
+                let _ = nix::sys::signal::signal(NixSignal::SIGTTIN, SigHandler::SigDfl);
+                let _ = nix::sys::signal::signal(NixSignal::SIGTTOU, SigHandler::SigDfl);
 
                 #[cfg(target_os = "linux")]
                 if let Some(sig) = death_sig {
