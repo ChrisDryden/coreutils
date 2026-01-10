@@ -372,7 +372,7 @@ fn timeout(
                 None => {
                     let status = process.wait()?;
                     if SIGNALED.load(atomic::Ordering::Relaxed) {
-                        Err(ExitStatus::Terminated.into())
+                        Err(ExitStatus::CommandTimedOut.into())
                     } else if preserve_status {
                         if let Some(ec) = status.code() {
                             Err(ec.into())
