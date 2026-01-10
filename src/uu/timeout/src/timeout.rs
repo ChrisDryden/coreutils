@@ -257,7 +257,10 @@ fn send_signal(process: &mut Child, signal: usize, foreground: bool) {
         let kill_signal = signal_by_name_or_value("KILL").unwrap();
         let continued_signal = signal_by_name_or_value("CONT").unwrap();
         if signal != kill_signal && signal != continued_signal {
-            _ = process.send_signal_group(continued_signal);
+            // Send SIGCONT to both child directly and process group
+            // (child may be in its own process group for cascaded timeouts)
+            let _ = process.send_signal(continued_signal);
+            let _ = process.send_signal_group(continued_signal);
         }
     }
 }
