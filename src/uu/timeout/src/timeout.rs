@@ -370,25 +370,42 @@ fn timeout(
     #[cfg(unix)]
     uucore::signals::preserve_sigpipe_for_child(&mut cmd_builder);
 
-    // Set up child process: prctl for parent-death signal (Linux only)
+    // Set up child process: reset signals and prctl for parent-death signal (Linux only)
     #[cfg(unix)]
     {
         use std::os::unix::process::CommandExt;
+        use nix::sys::signal::{SigHandler, Signal as NixSignal};
+
         #[cfg(target_os = "linux")]
         let death_sig = Signal::try_from(signal as i32).ok();
         #[cfg(not(target_os = "linux"))]
         let death_sig: Option<Signal> = None;
 
-        if death_sig.is_some() || !foreground {
-            unsafe {
-                cmd_builder.pre_exec(move || {
-                    #[cfg(target_os = "linux")]
-                    if let Some(sig) = death_sig {
-                        let _ = nix::sys::prctl::set_pdeathsig(sig);
-                    }
-                    Ok(())
-                });
-            }
+        unsafe {
+            cmd_builder.pre_exec(move || {
+                // Reset termination signals to default.
+                // This is critical because when a process is backgrounded,
+                // shells may set SIGINT/SIGQUIT to SIG_IGN. Children inherit
+                // this and cannot trap these signals unless we reset them.
+                // GNU coreutils timeout does this as well.
+                for sig in [
+                    NixSignal::SIGINT,
+                    NixSignal::SIGQUIT,
+                    NixSignal::SIGTERM,
+                    NixSignal::SIGHUP,
+                    NixSignal::SIGALRM,
+                    NixSignal::SIGUSR1,
+                    NixSignal::SIGUSR2,
+                ] {
+                    let _ = nix::sys::signal::signal(sig, SigHandler::SigDfl);
+                }
+
+                #[cfg(target_os = "linux")]
+                if let Some(sig) = death_sig {
+                    let _ = nix::sys::prctl::set_pdeathsig(sig);
+                }
+                Ok(())
+            });
         }
     }
 
