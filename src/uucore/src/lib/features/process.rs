@@ -107,11 +107,18 @@ impl ChildExt for Child {
     }
 
     fn send_signal_group(&mut self, signal: usize) -> io::Result<()> {
-        // Ignore the signal, so we don't go into a signal loop.
-        if unsafe { libc::signal(signal as i32, libc::SIG_IGN) } == usize::MAX {
-            return Err(io::Error::last_os_error());
-        }
-        if unsafe { libc::kill(0, signal as i32) } == 0 {
+        // Send signal to our process group (group 0 = caller's group).
+        // This matches GNU coreutils behavior: if the child has remained in our
+        // process group, it will receive this signal along with all other processes
+        // in the group. If the child has created its own process group (via setpgid),
+        // it won't receive this group signal, but will have received the direct signal.
+        //
+        // Ignore the signal temporarily so we don't receive it ourselves.
+        let old_handler = unsafe { libc::signal(signal as i32, libc::SIG_IGN) };
+        let result = unsafe { libc::kill(0, signal as i32) };
+        // Restore the old handler
+        unsafe { libc::signal(signal as i32, old_handler) };
+        if result == 0 {
             Ok(())
         } else {
             Err(io::Error::last_os_error())
