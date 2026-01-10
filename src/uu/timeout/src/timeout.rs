@@ -8,7 +8,7 @@ mod status;
 
 use crate::status::ExitStatus;
 use clap::{Arg, ArgAction, Command};
-use std::io::ErrorKind;
+use std::io::{ErrorKind, Write};
 use std::os::unix::process::ExitStatusExt;
 use std::process::{self, Child, Stdio};
 use std::sync::atomic::{self, AtomicBool};
@@ -20,7 +20,7 @@ use uucore::process::ChildExt;
 use uucore::translate;
 
 use uucore::{
-    format_usage, show_error,
+    format_usage,
     signals::{signal_by_name_or_value, signal_name_by_value},
 };
 
@@ -195,31 +195,51 @@ fn unblock_sigchld() {
     }
 }
 
-/// We should terminate child process when receiving TERM signal.
+/// We should terminate child process when receiving termination signals.
 static SIGNALED: AtomicBool = AtomicBool::new(false);
 
-fn catch_sigterm() {
-    use nix::sys::signal;
+/// Install signal handlers for all termination signals.
+/// This matches GNU coreutils behavior from term-sig.h.
+fn install_signal_handlers(term_signal: usize) {
+    use nix::sys::signal::{SigHandler, Signal};
 
-    extern "C" fn handle_sigterm(signal: libc::c_int) {
-        let signal = signal::Signal::try_from(signal).unwrap();
-        if signal == signal::Signal::SIGTERM {
-            SIGNALED.store(true, atomic::Ordering::Relaxed);
-        }
+    extern "C" fn handle_signal(_: libc::c_int) {
+        SIGNALED.store(true, atomic::Ordering::Relaxed);
     }
 
-    let handler = signal::SigHandler::Handler(handle_sigterm);
-    unsafe { signal::signal(signal::Signal::SIGTERM, handler) }.unwrap();
+    let handler = SigHandler::Handler(handle_signal);
+
+    // Catch all termination signals (matching GNU coreutils term-sig.h)
+    for sig in [
+        Signal::SIGALRM,
+        Signal::SIGINT,
+        Signal::SIGQUIT,
+        Signal::SIGHUP,
+        Signal::SIGTERM,
+        Signal::SIGPIPE,
+        Signal::SIGUSR1,
+        Signal::SIGUSR2,
+    ] {
+        let _ = unsafe { nix::sys::signal::signal(sig, handler) };
+    }
+
+    // Also catch the configured signal if different from the above
+    if let Ok(sig) = Signal::try_from(term_signal as i32) {
+        let _ = unsafe { nix::sys::signal::signal(sig, handler) };
+    }
 }
 
 /// Report that a signal is being sent if the verbose flag is set.
 fn report_if_verbose(signal: usize, cmd: &str, verbose: bool) {
     if verbose {
-        let s = signal_name_by_value(signal).unwrap();
-        show_error!(
-            "{}",
-            translate!("timeout-verbose-sending-signal", "signal" => s, "command" => cmd.quote())
-        );
+        // Signal 0 should display as "0", not "EXIT" (matching GNU behavior)
+        let s = if signal == 0 {
+            "0".to_string()
+        } else {
+            signal_name_by_value(signal).unwrap().to_string()
+        };
+        // Use writeln to stderr to avoid SIGPIPE issues with show_error!
+        let _ = writeln!(std::io::stderr(), "timeout: sending signal {} to command {}", s, cmd.quote());
     }
 }
 
@@ -227,9 +247,12 @@ fn send_signal(process: &mut Child, signal: usize, foreground: bool) {
     // NOTE: GNU timeout doesn't check for errors of signal.
     // The subprocess might have exited just after the timeout.
     // Sending a signal now would return "No such process", but we should still try to kill the children.
-    if foreground {
-        let _ = process.send_signal(signal);
-    } else {
+
+    // Always send directly to child first
+    let _ = process.send_signal(signal);
+
+    // In non-foreground mode, also send to our process group
+    if !foreground {
         let _ = process.send_signal_group(signal);
         let kill_signal = signal_by_name_or_value("KILL").unwrap();
         let continued_signal = signal_by_name_or_value("CONT").unwrap();
@@ -336,6 +359,28 @@ fn timeout(
     #[cfg(unix)]
     uucore::signals::preserve_sigpipe_for_child(&mut cmd_builder);
 
+    // Set up child process: prctl for parent-death signal (Linux only)
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::CommandExt;
+        #[cfg(target_os = "linux")]
+        let death_sig = Signal::try_from(signal as i32).ok();
+        #[cfg(not(target_os = "linux"))]
+        let death_sig: Option<Signal> = None;
+
+        if death_sig.is_some() || !foreground {
+            unsafe {
+                cmd_builder.pre_exec(move || {
+                    #[cfg(target_os = "linux")]
+                    if let Some(sig) = death_sig {
+                        let _ = nix::sys::prctl::set_pdeathsig(sig);
+                    }
+                    Ok(())
+                });
+            }
+        }
+    }
+
     let process = &mut cmd_builder.spawn().map_err(|err| {
         let status_code = match err.kind() {
             ErrorKind::NotFound => ExitStatus::CommandNotFound.into(),
@@ -348,7 +393,7 @@ fn timeout(
         )
     })?;
     unblock_sigchld();
-    catch_sigterm();
+    install_signal_handlers(signal);
     // Wait for the child process for the specified time period.
     //
     // If the process exits within the specified time period (the
