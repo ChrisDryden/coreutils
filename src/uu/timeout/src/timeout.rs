@@ -232,12 +232,8 @@ fn install_signal_handlers(term_signal: usize) {
 /// Report that a signal is being sent if the verbose flag is set.
 fn report_if_verbose(signal: usize, cmd: &str, verbose: bool) {
     if verbose {
-        // Signal 0 should display as "0", not "EXIT" (matching GNU behavior)
-        let s = if signal == 0 {
-            "0".to_string()
-        } else {
-            signal_name_by_value(signal).unwrap().to_string()
-        };
+        // signal_name_by_value returns "EXIT" for signal 0, matching GNU behavior
+        let s = signal_name_by_value(signal).unwrap();
         // Use writeln to stderr to avoid SIGPIPE issues with show_error!
         let _ = writeln!(std::io::stderr(), "timeout: sending signal {} to command {}", s, cmd.quote());
     }
