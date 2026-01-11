@@ -259,6 +259,12 @@ fn send_signal(process: &mut Child, signal: usize, foreground: bool) {
     // Always send directly to child first
     let _ = process.send_signal(signal);
 
+    // Signal 0 is special - it just checks if process exists, doesn't actually send anything.
+    // Skip group signaling and SIGCONT for signal 0.
+    if signal == 0 {
+        return;
+    }
+
     // In non-foreground mode, also send to our process group
     if !foreground {
         let _ = process.send_signal_group(signal);
