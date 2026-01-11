@@ -530,6 +530,25 @@ pub(crate) fn copy_directory(
     // This ensures that even sibling directories get their permissions fixed
     for (source_path, dest_path) in dirs_needing_permissions {
         copy_attributes(&source_path, &dest_path, &options.attributes)?;
+
+        // Apply SELinux context from -Z/--context for directories
+        #[cfg(all(feature = "selinux", target_os = "linux"))]
+        if options.set_selinux_context && uucore::selinux::is_selinux_enabled() {
+            if let Err(e) =
+                uucore::selinux::set_selinux_security_context(&dest_path, options.context.as_ref())
+            {
+                // Suppress "Operation not supported" errors for -Z and --context
+                if let uucore::selinux::SeLinuxError::ContextSetFailure(_, ref desc) = e {
+                    if !desc.contains("Operation not supported") {
+                        return Err(CpError::Error(format!(
+                            "failed to set SELinux context for '{}': {}",
+                            dest_path.display(),
+                            desc
+                        )));
+                    }
+                }
+            }
+        }
     }
 
     // Also fix permissions for parent directories,
@@ -539,6 +558,25 @@ pub(crate) fn copy_directory(
         for (x, y) in aligned_ancestors(root, dest.as_path()) {
             if let Ok(src) = canonicalize(x, MissingHandling::Normal, ResolveMode::Physical) {
                 copy_attributes(&src, y, &options.attributes)?;
+
+                // Apply SELinux context from -Z/--context for parent directories
+                #[cfg(all(feature = "selinux", target_os = "linux"))]
+                if options.set_selinux_context && uucore::selinux::is_selinux_enabled() {
+                    if let Err(e) =
+                        uucore::selinux::set_selinux_security_context(y, options.context.as_ref())
+                    {
+                        // Suppress "Operation not supported" errors for -Z and --context
+                        if let uucore::selinux::SeLinuxError::ContextSetFailure(_, ref desc) = e {
+                            if !desc.contains("Operation not supported") {
+                                return Err(CpError::Error(format!(
+                                    "failed to set SELinux context for '{}': {}",
+                                    y.display(),
+                                    desc
+                                )));
+                            }
+                        }
+                    }
+                }
             }
         }
     }
