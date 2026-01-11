@@ -1159,6 +1159,16 @@ impl Options {
             None
         };
 
+        // Check for mutually exclusive options: -Z/--context and --preserve=context
+        // These options cannot be used together as they have conflicting semantics
+        if (set_selinux_context || context.is_some())
+            && matches!(attributes.context, Preserve::Yes { .. })
+        {
+            return Err(CpError::Error(
+                "cannot combine --context (-Z) with --preserve=context".to_string(),
+            ));
+        }
+
         let options = Self {
             attributes_only: matches.get_flag(options::ATTRIBUTES_ONLY),
             copy_contents: matches.get_flag(options::COPY_CONTENTS),
@@ -1627,9 +1637,12 @@ impl OverwriteMode {
     }
 }
 
-/// Handles errors for attributes preservation. If the attribute is not required, and
-/// errored, tries to show error (see `show_error_if_needed` for additional behavior details).
-/// If it's required, then the error is thrown.
+/// Handles errors for attributes preservation. If the attribute is required and
+/// errors, the error is propagated. If not required, the error is silently ignored.
+///
+/// This matches GNU cp behavior which states:
+/// > Try to preserve SELinux security context and extended attributes (xattr),
+/// > but ignore any failure to do that and print no corresponding diagnostic.
 fn handle_preserve<F: Fn() -> CopyResult<()>>(p: &Preserve, f: F) -> CopyResult<()> {
     match p {
         Preserve::No { .. } => {}
@@ -1637,9 +1650,9 @@ fn handle_preserve<F: Fn() -> CopyResult<()>>(p: &Preserve, f: F) -> CopyResult<
             let result = f();
             if *required {
                 result?;
-            } else if let Err(error) = result {
-                show_error_if_needed(&error);
             }
+            // When required is false, silently ignore any errors
+            // (don't print diagnostics for non-required attribute preservation)
         }
     }
     Ok(())
@@ -2538,21 +2551,34 @@ fn copy_file(
         fs::set_permissions(dest, dest_permissions).ok();
     }
 
-    if options.dereference(source_in_command_line) {
+    let copy_attributes_result = if options.dereference(source_in_command_line) {
         // Try to canonicalize, but if it fails (e.g., due to inaccessible parent directories),
         // fall back to the original source path
         let src_for_attrs = canonicalize(source, MissingHandling::Normal, ResolveMode::Physical)
             .ok()
             .filter(|p| p.exists())
             .unwrap_or_else(|| source.to_path_buf());
-        copy_attributes(&src_for_attrs, dest, &options.attributes)?;
+        copy_attributes(&src_for_attrs, dest, &options.attributes)
     } else if source_is_stream && !source.exists() {
         // Some stream files may not exist after we have copied it,
         // like anonymous pipes. Thus, we can't really copy its
         // attributes. However, this is already handled in the stream
         // copy function (see `copy_stream` under platform/linux.rs).
+        Ok(())
     } else {
-        copy_attributes(source, dest, &options.attributes)?;
+        copy_attributes(source, dest, &options.attributes)
+    };
+
+    // If copy_attributes failed (for a required attribute), we need to
+    // truncate the destination file to match GNU cp behavior.
+    // GNU cp leaves the destination empty when a required attribute
+    // (like --preserve=context) cannot be preserved.
+    if let Err(e) = copy_attributes_result {
+        // Truncate the destination file to empty it
+        if let Ok(f) = fs::File::create(dest) {
+            let _ = f.set_len(0);
+        }
+        return Err(e);
     }
 
     #[cfg(all(feature = "selinux", target_os = "linux"))]
@@ -2561,6 +2587,16 @@ fn copy_file(
         if let Err(e) =
             uucore::selinux::set_selinux_security_context(dest, options.context.as_ref())
         {
+            // Suppress "Operation not supported" errors for -Z and --context.
+            // These errors occur on filesystems with fixed SELinux contexts (e.g., mounts
+            // with context= option) where setting contexts is not allowed.
+            // GNU cp silently ignores these errors for -Z/--context options.
+            if let uucore::selinux::SeLinuxError::ContextSetFailure(_, ref desc) = e {
+                if desc.contains("Operation not supported") {
+                    // Silently ignore - the copy was successful, just couldn't set context
+                    return Ok(());
+                }
+            }
             return Err(CpError::Error(
                 translate!("cp-error-selinux-error", "error" => e),
             ));
