@@ -112,7 +112,18 @@ impl ChildExt for Child {
         // process group, it will receive this signal along with all other processes
         // in the group. If the child has created its own process group (via setpgid),
         // it won't receive this group signal, but will have received the direct signal.
-        //
+
+        // Signal 0 is special - it just checks if process exists, doesn't send anything.
+        // No need to manipulate signal handlers for it.
+        if signal == 0 {
+            let result = unsafe { libc::kill(0, 0) };
+            return if result == 0 {
+                Ok(())
+            } else {
+                Err(io::Error::last_os_error())
+            };
+        }
+
         // Ignore the signal temporarily so we don't receive it ourselves.
         let old_handler = unsafe { libc::signal(signal as i32, libc::SIG_IGN) };
         let result = unsafe { libc::kill(0, signal as i32) };
