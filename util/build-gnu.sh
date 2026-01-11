@@ -359,3 +359,6 @@ test \$n_stat1 -ge \$n_stat2 \\' tests/ls/stat-free-color.sh
 # * the selinux crate is handling errors
 # * the test says "maybe we should not fail when no context available"
 "${SED}" -i -e "s|returns_ 1||g" tests/cp/no-ctx.sh
+
+# Temporary debug: add set -x to cp-a-selinux.sh to trace test execution
+"${SED}" -i '1a set -x' tests/cp/cp-a-selinux.sh
