@@ -1159,14 +1159,26 @@ impl Options {
             None
         };
 
-        // Check for mutually exclusive options: -Z/--context and --preserve=context
-        // These options cannot be used together as they have conflicting semantics
-        if (set_selinux_context || context.is_some())
-            && matches!(attributes.context, Preserve::Yes { .. })
-        {
-            return Err(CpError::Error(
-                "cannot combine --context (-Z) with --preserve=context".to_string(),
-            ));
+        // Handle interaction between -Z/--context and --preserve=context
+        // These options have conflicting semantics - -Z sets the default context,
+        // while --preserve=context preserves the source's context.
+        if set_selinux_context || context.is_some() {
+            match attributes.context {
+                Preserve::Yes { required: true } => {
+                    // Explicit --preserve=context conflicts with -Z/--context
+                    return Err(CpError::Error(
+                        "cannot combine --context (-Z) with --preserve=context".to_string(),
+                    ));
+                }
+                Preserve::Yes { required: false } => {
+                    // Implicit context preservation from -a should be overridden by -Z
+                    // Disable context preservation so -Z can set the default context
+                    attributes.context = Preserve::No { explicit: false };
+                }
+                Preserve::No { .. } => {
+                    // No context preservation - nothing to override
+                }
+            }
         }
 
         let options = Self {
