@@ -378,9 +378,6 @@ fn timeout(
         .stdout(Stdio::inherit())
         .stderr(Stdio::inherit());
 
-    #[cfg(unix)]
-    uucore::signals::preserve_sigpipe_for_child(&mut cmd_builder);
-
     // Set up child process: reset signals and prctl for parent-death signal (Linux only)
     #[cfg(unix)]
     {
@@ -392,12 +389,20 @@ fn timeout(
         #[cfg(not(target_os = "linux"))]
         let death_sig: Option<Signal> = None;
 
+        // Capture SIGPIPE state before pre_exec closure
+        let sigpipe_was_ignored = uucore::signals::sigpipe_was_ignored();
+
         unsafe {
             cmd_builder.pre_exec(move || {
                 // exec doesn't reset SIG_IGN -> SIG_DFL, so we do it manually.
                 // GNU coreutils timeout only resets SIGTTIN and SIGTTOU.
                 let _ = nix::sys::signal::signal(NixSignal::SIGTTIN, SigHandler::SigDfl);
                 let _ = nix::sys::signal::signal(NixSignal::SIGTTOU, SigHandler::SigDfl);
+
+                // Preserve SIGPIPE disposition for child if it was ignored at startup
+                if sigpipe_was_ignored {
+                    let _ = nix::sys::signal::signal(NixSignal::SIGPIPE, SigHandler::SigIgn);
+                }
 
                 #[cfg(target_os = "linux")]
                 if let Some(sig) = death_sig {
