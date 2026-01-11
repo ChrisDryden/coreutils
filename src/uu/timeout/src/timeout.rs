@@ -184,14 +184,14 @@ pub fn uu_app() -> Command {
         .after_help(translate!("timeout-after-help"))
 }
 
-/// Remove pre-existing SIGCHLD handlers that would make waiting for the child's exit code fail.
-fn unblock_sigchld() {
+/// Install SIGCHLD handler to ensure waiting for child works even if parent ignored SIGCHLD.
+fn install_sigchld() {
+    extern "C" fn chld(_: libc::c_int) {}
     unsafe {
-        nix::sys::signal::signal(
+        let _ = nix::sys::signal::signal(
             nix::sys::signal::Signal::SIGCHLD,
-            nix::sys::signal::SigHandler::SigDfl,
-        )
-        .unwrap();
+            nix::sys::signal::SigHandler::Handler(chld),
+        );
     }
 }
 
@@ -424,7 +424,7 @@ fn timeout(
             translate!("timeout-error-failed-to-execute-process", "error" => err),
         )
     })?;
-    unblock_sigchld();
+    install_sigchld();
     install_signal_handlers(signal);
     // Wait for the child process for the specified time period.
     //
