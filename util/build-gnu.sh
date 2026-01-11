@@ -362,3 +362,7 @@ test \$n_stat1 -ge \$n_stat2 \\' tests/ls/stat-free-color.sh
 
 # Temporary debug: add set -x to cp-a-selinux.sh to trace test execution
 "${SED}" -i '1a set -x' tests/cp/cp-a-selinux.sh
+
+# Temporary debug: add set -x to timeout tests to trace test execution
+"${SED}" -i '1a set -x' tests/timeout/timeout.sh
+"${SED}" -i '1a set -x' tests/timeout/timeout-group.sh
