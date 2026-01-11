@@ -1163,7 +1163,9 @@ impl Options {
         if set_selinux_context || context.is_some() {
             match attributes.context {
                 Preserve::Yes { required: true } => {
-                    return Err(CpError::Error(translate!("cp-error-selinux-context-conflict")));
+                    return Err(CpError::Error(translate!(
+                        "cp-error-selinux-context-conflict"
+                    )));
                 }
                 Preserve::Yes { required: false } => {
                     attributes.context = Preserve::No { explicit: false };
@@ -1653,18 +1655,8 @@ fn handle_preserve<F: Fn() -> CopyResult<()>>(p: &Preserve, f: F) -> CopyResult<
     Ok(())
 }
 
-/// Sets the SELinux security context for a path when -Z/--context is specified.
-///
-/// This helper handles the common pattern of setting SELinux context while properly
-/// handling errors:
-/// - Returns Ok(()) if SELinux is disabled or if context was set successfully
-/// - Silently ignores "operation not supported" errors (common on filesystems with fixed contexts)
-/// - Returns an error for other failures
 #[cfg(all(feature = "selinux", target_os = "linux"))]
-pub(crate) fn set_selinux_context(
-    path: &Path,
-    context: Option<&String>,
-) -> CopyResult<()> {
+pub(crate) fn set_selinux_context(path: &Path, context: Option<&String>) -> CopyResult<()> {
     if !uucore::selinux::is_selinux_enabled() {
         return Ok(());
     }
@@ -1672,7 +1664,9 @@ pub(crate) fn set_selinux_context(
     match uucore::selinux::set_selinux_security_context(path, context) {
         Ok(()) => Ok(()),
         Err(uucore::selinux::SeLinuxError::OperationNotSupported) => Ok(()),
-        Err(e) => Err(CpError::Error(translate!("cp-error-selinux-error", "error" => e))),
+        Err(e) => Err(CpError::Error(
+            translate!("cp-error-selinux-error", "error" => e),
+        )),
     }
 }
 
@@ -2592,7 +2586,12 @@ fn copy_file(
             .ok()
             .filter(|p| p.exists())
             .unwrap_or_else(|| source.to_path_buf());
-        copy_attributes(&src_for_attrs, dest, &options.attributes, options.set_selinux_context)
+        copy_attributes(
+            &src_for_attrs,
+            dest,
+            &options.attributes,
+            options.set_selinux_context,
+        )
     } else if source_is_stream && !source.exists() {
         // Some stream files may not exist after we have copied it,
         // like anonymous pipes. Thus, we can't really copy its
@@ -2600,7 +2599,12 @@ fn copy_file(
         // copy function (see `copy_stream` under platform/linux.rs).
         Ok(())
     } else {
-        copy_attributes(source, dest, &options.attributes, options.set_selinux_context)
+        copy_attributes(
+            source,
+            dest,
+            &options.attributes,
+            options.set_selinux_context,
+        )
     };
 
     // GNU cp truncates the destination when a required attribute cannot be preserved
@@ -2780,7 +2784,12 @@ fn copy_link(
         delete_path(dest, options)?;
     }
     symlink_file(&link, dest, symlinked_files)?;
-    copy_attributes(source, dest, &options.attributes, options.set_selinux_context)
+    copy_attributes(
+        source,
+        dest,
+        &options.attributes,
+        options.set_selinux_context,
+    )
 }
 
 /// Generate an error message if `target` is not the correct `target_type`

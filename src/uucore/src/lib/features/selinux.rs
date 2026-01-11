@@ -159,7 +159,7 @@ pub fn set_selinux_security_context(
         )
         .set_for_path(path, false, false)
         .map_err(|e| match &e {
-            selinux::errors::Error::IO { source, .. }
+            selinux::errors::Error::IO1Path { source, .. }
                 if source.raw_os_error() == Some(libc::ENOTSUP) =>
             {
                 SeLinuxError::OperationNotSupported
@@ -169,7 +169,7 @@ pub fn set_selinux_security_context(
     } else {
         // If no context provided, set the default SELinux context for the path
         SecurityContext::set_default_for_path(path).map_err(|e| match &e {
-            selinux::errors::Error::IO { source, .. }
+            selinux::errors::Error::IO1Path { source, .. }
                 if source.raw_os_error() == Some(libc::ENOTSUP) =>
             {
                 SeLinuxError::OperationNotSupported

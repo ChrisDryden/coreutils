@@ -26,12 +26,12 @@ use uucore::translate;
 use uucore::uio_error;
 use walkdir::{DirEntry, WalkDir};
 
+#[cfg(all(feature = "selinux", target_os = "linux"))]
+use crate::set_selinux_context;
 use crate::{
     CopyMode, CopyResult, CpError, Options, aligned_ancestors, context_for, copy_attributes,
     copy_file,
 };
-#[cfg(all(feature = "selinux", target_os = "linux"))]
-use crate::set_selinux_context;
 
 /// Ensure a Windows path starts with a `\\?`.
 #[cfg(target_os = "windows")]
@@ -533,7 +533,12 @@ pub(crate) fn copy_directory(
     // Fix permissions for all directories we created
     // This ensures that even sibling directories get their permissions fixed
     for (source_path, dest_path) in dirs_needing_permissions {
-        copy_attributes(&source_path, &dest_path, &options.attributes, options.set_selinux_context)?;
+        copy_attributes(
+            &source_path,
+            &dest_path,
+            &options.attributes,
+            options.set_selinux_context,
+        )?;
 
         #[cfg(all(feature = "selinux", target_os = "linux"))]
         if options.set_selinux_context {
