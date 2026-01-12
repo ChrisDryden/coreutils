@@ -213,6 +213,8 @@ fn install_signal_handlers(term_signal: usize) {
     let handler = SigHandler::Handler(handle_signal);
 
     // Catch all termination signals (matching GNU coreutils term-sig.h)
+    // Skip SIGPIPE if it was already ignored - don't override parent's disposition
+    let sigpipe_ignored = uucore::signals::sigpipe_was_ignored();
     for sig in [
         Signal::SIGALRM,
         Signal::SIGINT,
@@ -223,6 +225,9 @@ fn install_signal_handlers(term_signal: usize) {
         Signal::SIGUSR1,
         Signal::SIGUSR2,
     ] {
+        if sig == Signal::SIGPIPE && sigpipe_ignored {
+            continue;
+        }
         let _ = unsafe { nix::sys::signal::signal(sig, handler) };
     }
 
@@ -379,8 +384,8 @@ fn timeout(
     // Set up child process: reset signals and prctl for parent-death signal (Linux only)
     #[cfg(unix)]
     {
-        use std::os::unix::process::CommandExt;
         use nix::sys::signal::{SigHandler, Signal as NixSignal};
+        use std::os::unix::process::CommandExt;
 
         #[cfg(target_os = "linux")]
         let death_sig = Signal::try_from(signal as i32).ok();
