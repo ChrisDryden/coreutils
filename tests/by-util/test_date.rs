@@ -480,9 +480,9 @@ fn test_date_set_valid_4() {
 
 #[test]
 fn test_invalid_format_string() {
-    let result = new_ucmd!().arg("+%!").fails();
-    result.no_stdout();
-    assert!(result.stderr_str().starts_with("date: invalid format "));
+    // With lenient mode enabled (to match GNU behavior), invalid format
+    // sequences are output literally instead of causing errors.
+    new_ucmd!().arg("+%!").succeeds().stdout_is("%!\n");
 }
 
 #[test]
@@ -1445,4 +1445,49 @@ fn test_date_locale_fr_french() {
         stdout.contains("UTC") || stdout.contains("+00") || stdout.contains('Z'),
         "Output should include timezone information, got: {stdout}"
     );
+}
+
+#[test]
+fn test_date_lenient_invalid_format() {
+    // Test that invalid format sequences are output literally (lenient mode)
+    // GNU test: tz-5wf - format %5: is invalid but should output literally
+    new_ucmd!()
+        .env("TZ", "UTC0")
+        .arg("-d@0")
+        .arg("-u")
+        .arg("+%5:")
+        .succeeds()
+        .stdout_is("%5:\n");
+}
+
+#[test]
+#[cfg(unix)]
+fn test_date_invalid_utf8_input() {
+    // Test that non-UTF-8 input is handled with octal escape formatting
+    // GNU test: invalid-high-bit-set
+    // Byte 0xb0 (176 decimal) should be displayed as \260 (octal)
+    use std::ffi::OsStr;
+    use std::os::unix::ffi::OsStrExt;
+
+    let invalid_bytes: &[u8] = &[0xb0];
+    let invalid_os_str = OsStr::from_bytes(invalid_bytes);
+
+    new_ucmd!()
+        .arg("-d")
+        .arg(invalid_os_str)
+        .fails_with_code(1)
+        .stderr_contains("invalid date")
+        .stderr_contains("\\260");
+}
+
+#[test]
+fn test_date_timezone_width_leading_zeros() {
+    // Test that timezone width specifier pads hours with leading zeros
+    // GNU test: tz-5w - format %8:z with TZ=XXX0:01 outputs -0000:01
+    // The width (8) applies to the hours portion, padding with zeros
+    new_ucmd!()
+        .env("TZ", "XXX0:01")
+        .arg("+%8:z")
+        .succeeds()
+        .stdout_is("-0000:01\n");
 }

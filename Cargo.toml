@@ -679,3 +679,7 @@ format_push_string = "allow"
 flat_map_option = "allow"
 from_iter_instead_of_collect = "allow"
 large_types_passed_by_value = "allow"
+
+[patch.crates-io]
+jiff = { path = "../jiff" }
+parse_datetime = { path = "../parse_datetime" }

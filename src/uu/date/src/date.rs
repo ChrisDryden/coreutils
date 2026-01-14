@@ -8,10 +8,11 @@
 mod locale;
 
 use clap::{Arg, ArgAction, Command};
-use jiff::fmt::strtime;
+use jiff::fmt::strtime::{self, BrokenDownTime, Config, PosixCustom};
 use jiff::tz::{TimeZone, TimeZoneDatabase};
 use jiff::{Timestamp, Zoned};
 use std::collections::HashMap;
+use std::ffi::OsString;
 use std::fs::File;
 use std::io::{BufRead, BufReader, BufWriter, Write};
 use std::path::PathBuf;
@@ -114,6 +115,29 @@ impl From<&str> for Rfc3339Format {
             _ => panic!("Invalid format: {s}"),
         }
     }
+}
+
+/// Format an OsString for display, escaping non-UTF-8 bytes as octal (like GNU date).
+/// For example, byte 0xb0 becomes `\260`.
+#[cfg(unix)]
+fn format_os_string_for_error(s: &OsString) -> String {
+    use std::os::unix::ffi::OsStrExt;
+    let bytes = s.as_bytes();
+    let mut result = String::new();
+    for &byte in bytes {
+        if byte.is_ascii() && !byte.is_ascii_control() {
+            result.push(byte as char);
+        } else {
+            // Format as octal escape like GNU date: \260 for 0xb0
+            result.push_str(&format!("\\{:03o}", byte));
+        }
+    }
+    result
+}
+
+#[cfg(not(unix))]
+fn format_os_string_for_error(s: &OsString) -> String {
+    s.to_string_lossy().into_owned()
 }
 
 /// Indicates whether parsing a military timezone causes the date to remain the same, roll back to the previous day, or
@@ -230,8 +254,16 @@ pub fn uumain(args: impl uucore::Args) -> UResult<()> {
         Format::Default
     };
 
-    let date_source = if let Some(date) = matches.get_one::<String>(OPT_DATE) {
-        DateSource::Human(date.into())
+    let date_source = if let Some(date_os) = matches.get_one::<OsString>(OPT_DATE) {
+        match date_os.to_str() {
+            Some(date) => DateSource::Human(date.into()),
+            None => {
+                return Err(USimpleError::new(
+                    1,
+                    translate!("date-error-invalid-date", "date" => format_os_string_for_error(date_os)),
+                ));
+            }
+        }
     } else if let Some(file) = matches.get_one::<String>(OPT_FILE) {
         match file.as_ref() {
             "-" => DateSource::Stdin,
@@ -376,6 +408,11 @@ pub fn uumain(args: impl uucore::Args) -> UResult<()> {
                     // Fallback on parse failure of digits
                     parse_date(input)
                 }
+            } else if settings.utc {
+                // When -u is set, parse with UTC as the base timezone
+                // This makes ambiguous inputs (without explicit timezone) be interpreted as UTC
+                parse_datetime::parse_datetime_at_date(now.clone(), input)
+                    .map_err(|e| (input.to_string(), e))
             } else {
                 parse_date(input)
             };
@@ -385,7 +422,15 @@ pub fn uumain(args: impl uucore::Args) -> UResult<()> {
         }
         DateSource::Stdin => {
             let lines = BufReader::new(std::io::stdin()).lines();
-            let iter = lines.map_while(Result::ok).map(parse_date);
+            let now = now.clone();
+            let iter = lines.map_while(Result::ok).map(move |line| {
+                if settings.utc {
+                    parse_datetime::parse_datetime_at_date(now.clone(), &line)
+                        .map_err(|e| (line, e))
+                } else {
+                    parse_date(line)
+                }
+            });
             Box::new(iter)
         }
         DateSource::File(ref path) => {
@@ -398,7 +443,15 @@ pub fn uumain(args: impl uucore::Args) -> UResult<()> {
             let file =
                 File::open(path).map_err_context(|| path.as_os_str().maybe_quote().to_string())?;
             let lines = BufReader::new(file).lines();
-            let iter = lines.map_while(Result::ok).map(parse_date);
+            let now = now.clone();
+            let iter = lines.map_while(Result::ok).map(move |line| {
+                if settings.utc {
+                    parse_datetime::parse_datetime_at_date(now.clone(), &line)
+                        .map_err(|e| (line, e))
+                } else {
+                    parse_date(line)
+                }
+            });
             Box::new(iter)
         }
         DateSource::FileMtime(ref path) => {
@@ -431,21 +484,32 @@ pub fn uumain(args: impl uucore::Args) -> UResult<()> {
     let mut stdout = BufWriter::new(std::io::stdout().lock());
 
     // Format all the dates
+    // Use PosixCustom for GNU/POSIX compatible formatting (e.g., %r with zero-padded hours)
+    // Enable lenient mode to output invalid format sequences literally (like GNU date)
+    // Enable gnu_extensions for GNU-specific format modifiers (%+, %^ on compound formats)
+    let config = Config::new().custom(PosixCustom::new()).lenient(true).gnu_extensions(true);
     for date in dates {
         match date {
-            // TODO: Switch to lenient formatting.
-            Ok(date) => match strtime::format(format_string, &date) {
-                Ok(s) => writeln!(stdout, "{s}").map_err(|e| {
-                    USimpleError::new(1, translate!("date-error-write", "error" => e))
-                })?,
-                Err(e) => {
-                    let _ = stdout.flush();
-                    return Err(USimpleError::new(
-                        1,
-                        translate!("date-error-invalid-format", "format" => format_string, "error" => e),
-                    ));
+            Ok(date) => {
+                // Convert to UTC if --utc flag is set
+                let date = if settings.utc {
+                    date.with_time_zone(TimeZone::UTC)
+                } else {
+                    date
+                };
+                match BrokenDownTime::from(&date).to_string_with_config(&config, format_string) {
+                    Ok(s) => writeln!(stdout, "{s}").map_err(|e| {
+                        USimpleError::new(1, translate!("date-error-write", "error" => e))
+                    })?,
+                    Err(e) => {
+                        let _ = stdout.flush();
+                        return Err(USimpleError::new(
+                            1,
+                            translate!("date-error-invalid-format", "format" => format_string, "error" => e),
+                        ));
+                    }
                 }
-            },
+            }
             Err((input, _err)) => {
                 let _ = stdout.flush();
                 show!(USimpleError::new(
@@ -473,6 +537,7 @@ pub fn uu_app() -> Command {
                 .value_name("STRING")
                 .allow_hyphen_values(true)
                 .overrides_with(OPT_DATE)
+                .value_parser(clap::value_parser!(OsString))
                 .help(translate!("date-help-date")),
         )
         .arg(
