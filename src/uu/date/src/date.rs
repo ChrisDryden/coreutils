@@ -5,6 +5,7 @@
 
 // spell-checker:ignore strtime ; (format) DATEFILE MMDDhhmm ; (vars) datetime datetimes getres AWST ACST AEST
 
+mod calendar;
 mod locale;
 
 use clap::{Arg, ArgAction, Command};
@@ -430,12 +431,30 @@ pub fn uumain(args: impl uucore::Args) -> UResult<()> {
     let format_string = make_format_string(&settings);
     let mut stdout = BufWriter::new(std::io::stdout().lock());
 
+    // Detect calendar type from locale
+    let calendar_type = calendar::CalendarType::from_locale();
+
+    // ISO 8601 and RFC 3339 must always use Gregorian calendar
+    let use_gregorian = matches!(
+        settings.format,
+        Format::Iso8601(_) | Format::Rfc3339(_) | Format::Rfc5322
+    );
+
     // Format all the dates
     let config = Config::new().custom(PosixCustom::new()).lenient(true);
     for date in dates {
         match date {
             Ok(date) => {
-                match BrokenDownTime::from(&date).to_string_with_config(&config, format_string) {
+                let format_result =
+                    if use_gregorian || calendar_type == calendar::CalendarType::Gregorian {
+                        // Standard Gregorian formatting
+                        BrokenDownTime::from(&date).to_string_with_config(&config, format_string)
+                    } else {
+                        // Calendar-aware formatting for non-Gregorian locales
+                        calendar::format_with_calendar(&date, format_string, calendar_type, &config)
+                    };
+
+                match format_result {
                     Ok(s) => writeln!(stdout, "{s}").map_err(|e| {
                         USimpleError::new(1, translate!("date-error-write", "error" => e))
                     })?,
