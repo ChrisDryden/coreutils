@@ -24,8 +24,10 @@ use uucore::{
     signals::{signal_by_name_or_value, signal_name_by_value},
 };
 
-use nix::sys::signal::{Signal, kill};
+use nix::sys::signal::{SigHandler, Signal, kill};
 use nix::unistd::{Pid, getpid, setpgid};
+#[cfg(unix)]
+use std::os::unix::process::CommandExt;
 
 pub mod options {
     pub static FOREGROUND: &str = "foreground";
@@ -187,12 +189,7 @@ pub fn uu_app() -> Command {
 /// Install SIGCHLD handler to ensure waiting for child works even if parent ignored SIGCHLD.
 fn install_sigchld() {
     extern "C" fn chld(_: libc::c_int) {}
-    unsafe {
-        let _ = nix::sys::signal::signal(
-            nix::sys::signal::Signal::SIGCHLD,
-            nix::sys::signal::SigHandler::Handler(chld),
-        );
-    }
+    let _ = unsafe { nix::sys::signal::signal(Signal::SIGCHLD, SigHandler::Handler(chld)) };
 }
 
 /// We should terminate child process when receiving termination signals.
@@ -200,38 +197,25 @@ static SIGNALED: AtomicBool = AtomicBool::new(false);
 /// Track which signal was received (0 = none/timeout expired naturally).
 static RECEIVED_SIGNAL: std::sync::atomic::AtomicI32 = std::sync::atomic::AtomicI32::new(0);
 
-/// Install signal handlers for all termination signals.
-/// This matches GNU coreutils behavior from term-sig.h.
+/// Install signal handlers for termination signals.
 fn install_signal_handlers(term_signal: usize) {
-    use nix::sys::signal::{SigHandler, Signal};
-
     extern "C" fn handle_signal(sig: libc::c_int) {
         SIGNALED.store(true, atomic::Ordering::Relaxed);
         RECEIVED_SIGNAL.store(sig, atomic::Ordering::Relaxed);
     }
 
     let handler = SigHandler::Handler(handle_signal);
-
-    // Catch all termination signals (matching GNU coreutils term-sig.h)
-    // Skip SIGPIPE if it was already ignored - don't override parent's disposition
     let sigpipe_ignored = uucore::signals::sigpipe_was_ignored();
+
     for sig in [
-        Signal::SIGALRM,
-        Signal::SIGINT,
-        Signal::SIGQUIT,
-        Signal::SIGHUP,
-        Signal::SIGTERM,
-        Signal::SIGPIPE,
-        Signal::SIGUSR1,
-        Signal::SIGUSR2,
+        Signal::SIGALRM, Signal::SIGINT, Signal::SIGQUIT, Signal::SIGHUP,
+        Signal::SIGTERM, Signal::SIGPIPE, Signal::SIGUSR1, Signal::SIGUSR2,
     ] {
-        if sig == Signal::SIGPIPE && sigpipe_ignored {
-            continue;
+        if sig != Signal::SIGPIPE || !sigpipe_ignored {
+            let _ = unsafe { nix::sys::signal::signal(sig, handler) };
         }
-        let _ = unsafe { nix::sys::signal::signal(sig, handler) };
     }
 
-    // Also catch the configured signal if different from the above
     if let Ok(sig) = Signal::try_from(term_signal as i32) {
         let _ = unsafe { nix::sys::signal::signal(sig, handler) };
     }
@@ -240,47 +224,24 @@ fn install_signal_handlers(term_signal: usize) {
 /// Report that a signal is being sent if the verbose flag is set.
 fn report_if_verbose(signal: usize, cmd: &str, verbose: bool) {
     if verbose {
-        // Signal 0 should display as "0", not "EXIT" (matching GNU behavior)
-        let s = if signal == 0 {
-            "0".to_string()
-        } else {
-            signal_name_by_value(signal).unwrap().to_string()
-        };
-        // Use writeln to stderr to avoid SIGPIPE issues with show_error!
-        let _ = writeln!(
-            std::io::stderr(),
-            "timeout: sending signal {} to command {}",
-            s,
-            cmd.quote()
-        );
+        let s = if signal == 0 { "0".to_string() } else { signal_name_by_value(signal).unwrap().to_string() };
+        let _ = writeln!(std::io::stderr(), "timeout: sending signal {} to command {}", s, cmd.quote());
     }
 }
 
 fn send_signal(process: &mut Child, signal: usize, foreground: bool) {
     // NOTE: GNU timeout doesn't check for errors of signal.
     // The subprocess might have exited just after the timeout.
-    // Sending a signal now would return "No such process", but we should still try to kill the children.
-
-    // Always send directly to child first
     let _ = process.send_signal(signal);
-
-    // Signal 0 is special - it just checks if process exists, doesn't actually send anything.
-    // Skip group signaling and SIGCONT for signal 0.
-    if signal == 0 {
+    if signal == 0 || foreground {
         return;
     }
-
-    // In non-foreground mode, also send to our process group
-    if !foreground {
-        let _ = process.send_signal_group(signal);
-        let kill_signal = signal_by_name_or_value("KILL").unwrap();
-        let continued_signal = signal_by_name_or_value("CONT").unwrap();
-        if signal != kill_signal && signal != continued_signal {
-            // Send SIGCONT to both child directly and process group
-            // (child may be in its own process group for cascaded timeouts)
-            let _ = process.send_signal(continued_signal);
-            let _ = process.send_signal_group(continued_signal);
-        }
+    let _ = process.send_signal_group(signal);
+    let kill_sig = signal_by_name_or_value("KILL").unwrap();
+    let cont_sig = signal_by_name_or_value("CONT").unwrap();
+    if signal != kill_sig && signal != cont_sig {
+        let _ = process.send_signal(cont_sig);
+        let _ = process.send_signal_group(cont_sig);
     }
 }
 
@@ -378,32 +339,19 @@ fn timeout(
         .stdout(Stdio::inherit())
         .stderr(Stdio::inherit());
 
-    // Set up child process: reset signals and prctl for parent-death signal (Linux only)
     #[cfg(unix)]
     {
-        use nix::sys::signal::{SigHandler, Signal as NixSignal};
-        use std::os::unix::process::CommandExt;
-
         #[cfg(target_os = "linux")]
         let death_sig = Signal::try_from(signal as i32).ok();
-        #[cfg(not(target_os = "linux"))]
-        let death_sig: Option<Signal> = None;
-
-        // Capture SIGPIPE state before pre_exec closure
         let sigpipe_was_ignored = uucore::signals::sigpipe_was_ignored();
 
         unsafe {
             cmd_builder.pre_exec(move || {
-                // exec doesn't reset SIG_IGN -> SIG_DFL, so we do it manually.
-                // GNU coreutils timeout only resets SIGTTIN and SIGTTOU.
-                let _ = nix::sys::signal::signal(NixSignal::SIGTTIN, SigHandler::SigDfl);
-                let _ = nix::sys::signal::signal(NixSignal::SIGTTOU, SigHandler::SigDfl);
-
-                // Preserve SIGPIPE disposition for child if it was ignored at startup
+                let _ = nix::sys::signal::signal(Signal::SIGTTIN, SigHandler::SigDfl);
+                let _ = nix::sys::signal::signal(Signal::SIGTTOU, SigHandler::SigDfl);
                 if sigpipe_was_ignored {
-                    let _ = nix::sys::signal::signal(NixSignal::SIGPIPE, SigHandler::SigIgn);
+                    let _ = nix::sys::signal::signal(Signal::SIGPIPE, SigHandler::SigIgn);
                 }
-
                 #[cfg(target_os = "linux")]
                 if let Some(sig) = death_sig {
                     let _ = nix::sys::prctl::set_pdeathsig(sig);
@@ -426,76 +374,42 @@ fn timeout(
     })?;
     install_sigchld();
     install_signal_handlers(signal);
-    // Wait for the child process for the specified time period.
-    //
-    // If the process exits within the specified time period (the
-    // `Ok(Some(_))` arm), then return the appropriate status code.
-    //
-    // If the process does not exit within that time (the `Ok(None)`
-    // arm) and `kill_after` is specified, then try sending `SIGKILL`.
-    //
-    // TODO The structure of this block is extremely similar to the
-    // structure of `wait_or_kill_process()`. They can probably be
-    // refactored into some common function.
+
     match process.wait_or_timeout(duration, Some(&SIGNALED)) {
         Ok(Some(status)) => Err(status
             .code()
             .unwrap_or_else(|| preserve_signal_info(status.signal().unwrap()))
             .into()),
         Ok(None) => {
-            // Check if we received an external signal vs natural timeout
-            // If we received an external signal, forward that signal to the child
-            // SIGALRM is treated as timeout expiry (sends configured signal)
             let received_sig = RECEIVED_SIGNAL.load(atomic::Ordering::Relaxed);
-            let signal_to_send = if received_sig > 0 && received_sig != libc::SIGALRM {
-                received_sig as usize
-            } else {
-                signal
-            };
+            let is_external_signal = received_sig > 0 && received_sig != libc::SIGALRM;
+            let signal_to_send = if is_external_signal { received_sig as usize } else { signal };
 
             report_if_verbose(signal_to_send, &cmd[0], verbose);
             send_signal(process, signal_to_send, foreground);
-            match kill_after {
-                None => {
-                    let status = process.wait()?;
-                    // If we received an external signal (not SIGALRM), exit with signal code
-                    if received_sig > 0 && received_sig != libc::SIGALRM {
-                        Err(ExitStatus::SignalSent(received_sig as usize).into())
-                    } else if SIGNALED.load(atomic::Ordering::Relaxed) {
-                        Err(ExitStatus::CommandTimedOut.into())
-                    } else if preserve_status {
-                        if let Some(ec) = status.code() {
-                            Err(ec.into())
-                        } else if let Some(sc) = status.signal() {
-                            Err(ExitStatus::SignalSent(sc.try_into().unwrap()).into())
-                        } else {
-                            Err(ExitStatus::CommandTimedOut.into())
-                        }
-                    } else {
-                        Err(ExitStatus::CommandTimedOut.into())
-                    }
-                }
-                Some(kill_after) => {
-                    match wait_or_kill_process(
-                        process,
-                        &cmd[0],
-                        kill_after,
-                        preserve_status,
-                        foreground,
-                        verbose,
-                    ) {
-                        Ok(status) => Err(status.into()),
-                        Err(e) => Err(USimpleError::new(
-                            ExitStatus::TimeoutFailed.into(),
-                            e.to_string(),
-                        )),
-                    }
-                }
+
+            if let Some(kill_after) = kill_after {
+                return match wait_or_kill_process(process, &cmd[0], kill_after, preserve_status, foreground, verbose) {
+                    Ok(status) => Err(status.into()),
+                    Err(e) => Err(USimpleError::new(ExitStatus::TimeoutFailed.into(), e.to_string())),
+                };
+            }
+
+            let status = process.wait()?;
+            if is_external_signal {
+                Err(ExitStatus::SignalSent(received_sig as usize).into())
+            } else if SIGNALED.load(atomic::Ordering::Relaxed) {
+                Err(ExitStatus::CommandTimedOut.into())
+            } else if preserve_status {
+                Err(status.code()
+                    .or_else(|| status.signal().map(|s| ExitStatus::SignalSent(s as usize).into()))
+                    .unwrap_or(ExitStatus::CommandTimedOut.into())
+                    .into())
+            } else {
+                Err(ExitStatus::CommandTimedOut.into())
             }
         }
         Err(_) => {
-            // We're going to return ERR_EXIT_STATUS regardless of
-            // whether `send_signal()` succeeds or fails
             send_signal(process, signal, foreground);
             Err(ExitStatus::TimeoutFailed.into())
         }
