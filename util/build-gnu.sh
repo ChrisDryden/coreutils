@@ -4,7 +4,7 @@
 
 # spell-checker:ignore (paths) abmon deref discrim eacces getlimits getopt ginstall inacc infloop inotify reflink ; (misc) INT_OFLOW OFLOW
 # spell-checker:ignore baddecode submodules xstrtol distros ; (vars/env) SRCDIR vdir rcexp xpart dired OSTYPE ; (utils) greadlink gsed multihardlink texinfo CARGOFLAGS
-# spell-checker:ignore openat TOCTOU CFLAGS tmpfs gnproc
+# spell-checker:ignore openat TOCTOU CFLAGS tmpfs gnproc setsid
 
 set -e
 
@@ -230,6 +230,7 @@ sed -i -e "s|---dis ||g" tests/tail/overlay-headers.sh
     -e 's|gdb -nx --batch-silent|gdb -nx -iex "set auto-load no" -iex "set disable-randomization off"|g' \
     -e 's|"break \$break_line"|"break \$break_src:\$break_line"|g' \
     -e 's|kill \$sleep|echo "=== gdb.out before kill ===" \&\& cat gdb.out \&\& echo "==="\nkill \$sleep|g' \
+    -e 's|env sleep 10|setsid sleep 300|g' \
     tests/tail/inotify-race.sh tests/tail/inotify-race2.sh
 
 # Do not FAIL, just do a regular ERROR
