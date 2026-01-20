@@ -224,12 +224,10 @@ sed -i -e "s|---dis ||g" tests/tail/overlay-headers.sh
 # "set disable-randomization off" prevents ASLR warnings in restricted environments (CI).
 # GDB needs full path (break $break_src:$break_line) for Rust sources.
 "${SED}" -i \
-    -e '2a set -x' \
     -e "s|break_src=\"\$abs_top_srcdir/src/tail.c\"|break_src=\"${path_UUTILS}/src/uu/tail/src/follow/watch.rs\"|" \
     -e 's|break_line=$(grep -n ^tail_forever_inotify "$break_src")|break_line=$(grep -n "watcher_rx.watch_with_parent" "$break_src")|' \
-    -e 's|gdb -nx --batch-silent|gdb -nx -iex "set auto-load no" -iex "set disable-randomization off"|g' \
+    -e 's|gdb -nx --batch-silent|gdb -nx --batch-silent -iex "set auto-load no" -iex "set disable-randomization off"|g' \
     -e 's|"break \$break_line"|"break \$break_src:\$break_line"|g' \
-    -e 's|kill \$sleep|echo "=== gdb.out before kill ===" \&\& cat gdb.out \&\& echo "==="\nkill \$sleep|g' \
     -e 's|env sleep 10|setsid sleep 300|g' \
     tests/tail/inotify-race.sh tests/tail/inotify-race2.sh
 
