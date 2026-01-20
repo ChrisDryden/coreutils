@@ -227,7 +227,7 @@ sed -i -e "s|---dis ||g" tests/tail/overlay-headers.sh
     -e '2a set -x' \
     -e "s|break_src=\"\$abs_top_srcdir/src/tail.c\"|break_src=\"${path_UUTILS}/src/uu/tail/src/follow/watch.rs\"|" \
     -e 's|break_line=$(grep -n ^tail_forever_inotify "$break_src")|break_line=$(grep -n "watcher_rx.watch_with_parent" "$break_src")|' \
-    -e 's|gdb -nx --batch-silent|gdb -nx --batch-silent -iex "set auto-load no" -iex "set disable-randomization off"|g' \
+    -e 's|gdb -nx --batch-silent|gdb -nx -iex "set auto-load no" -iex "set disable-randomization off"|g' \
     -e 's|"break \$break_line"|"break \$break_src:\$break_line"|g' \
     -e 's|compare /dev/null gdb.out|echo "=== gdb.out ===" \&\& cat gdb.out \&\& echo "===" \&\& compare /dev/null gdb.out|g' \
     tests/tail/inotify-race.sh tests/tail/inotify-race2.sh
