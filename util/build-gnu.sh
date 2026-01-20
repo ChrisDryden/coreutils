@@ -26,6 +26,10 @@ REPO_main_dir="$(dirname -- "${ME_dir}")"
 export PROFILE # tell to make
 unset CARGOFLAGS
 
+# Keep debug symbols in release builds for GDB-based tests (e.g., inotify-race)
+export CARGO_PROFILE_RELEASE_SMALL_DEBUG=2
+export CARGO_PROFILE_RELEASE_SMALL_STRIP="none"
+
 ### * config (from environment with fallback defaults); note: GNU is expected to be a sibling repo directory
 
 path_UUTILS=${path_UUTILS:-${REPO_main_dir}}
@@ -221,10 +225,13 @@ sed -i -e "s|---dis ||g" tests/tail/overlay-headers.sh
 # watchers before initial read, so no exact equivalent exists. We break at
 # watch_with_parent as the closest semantic match. -iex suppresses Rust debug
 # script auto-load warnings that would cause the test to skip.
+# GDB needs full path (break $break_src:$break_line) for Rust sources.
 "${SED}" -i \
+    -e '2a set -x' \
     -e "s|break_src=\"\$abs_top_srcdir/src/tail.c\"|break_src=\"${path_UUTILS}/src/uu/tail/src/follow/watch.rs\"|" \
     -e 's|break_line=$(grep -n ^tail_forever_inotify "$break_src")|break_line=$(grep -n "watcher_rx.watch_with_parent" "$break_src")|' \
     -e 's|gdb -nx --batch-silent|gdb -nx --batch-silent -iex "set auto-load no"|g' \
+    -e 's|"break \$break_line"|"break \$break_src:\$break_line"|g' \
     tests/tail/inotify-race.sh tests/tail/inotify-race2.sh
 
 # Do not FAIL, just do a regular ERROR
