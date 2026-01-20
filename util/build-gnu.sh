@@ -229,7 +229,7 @@ sed -i -e "s|---dis ||g" tests/tail/overlay-headers.sh
     -e 's|break_line=$(grep -n ^tail_forever_inotify "$break_src")|break_line=$(grep -n "watcher_rx.watch_with_parent" "$break_src")|' \
     -e 's|gdb -nx --batch-silent|gdb -nx -iex "set auto-load no" -iex "set disable-randomization off"|g' \
     -e 's|"break \$break_line"|"break \$break_src:\$break_line"|g' \
-    -e 's|compare /dev/null gdb.out|echo "=== gdb.out ===" \&\& cat gdb.out \&\& echo "===" \&\& compare /dev/null gdb.out|g' \
+    -e 's|kill \$sleep|echo "=== gdb.out before kill ===" \&\& cat gdb.out \&\& echo "==="\nkill \$sleep|g' \
     tests/tail/inotify-race.sh tests/tail/inotify-race2.sh
 
 # Do not FAIL, just do a regular ERROR
