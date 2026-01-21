@@ -596,11 +596,12 @@ panic = "abort"
 inherits = "release"
 codegen-units = 1
 
-# A release-like profile that is as small as possible.
+# A release-like profile that is as small as possible but keeps debug symbols
+# for gdb breakpoints in GNU tests (e.g., inotify-race tests).
 [profile.release-small]
 inherits = "release-fast"
 opt-level = "z"
-strip = true
+debug = true
 
 # A release-like profile with debug info for profiling.
 # See https://github.com/mstange/samply .

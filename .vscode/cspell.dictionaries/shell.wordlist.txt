@@ -13,6 +13,7 @@ mountinfo
 mountpoint
 mtab
 nullglob
+setsid
 
 # * Signals
 SIGUSR

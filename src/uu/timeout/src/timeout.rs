@@ -331,9 +331,10 @@ fn timeout(
     preserve_status: bool,
     verbose: bool,
 ) -> UResult<()> {
-    if !foreground {
-        let _ = setpgid(Pid::from_raw(0), Pid::from_raw(0));
-    }
+    // If not in foreground mode, try to create a new process group.
+    // If setpgid fails, fall back to foreground mode to avoid sending
+    // signals to the wrong process group (which could kill unrelated processes).
+    let foreground = foreground || setpgid(Pid::from_raw(0), Pid::from_raw(0)).is_err();
     #[cfg(unix)]
     enable_pipe_errors()?;
 
