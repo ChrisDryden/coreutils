@@ -1,7 +1,9 @@
 #!/bin/bash -e
 # Clone from master to get the latest GNU tests
 repo=https://github.com/coreutils/coreutils
-git clone --depth 1 "${repo}" .
+git clone --depth 1 "${repo}" gnu-temp
+mv gnu-temp/* gnu-temp/.* . 2>/dev/null || true
+rm -rf gnu-temp
 
 # Replace tests not compatible with our binaries
 sed -i -e 's/no-mtab-status.sh/no-mtab-status-masked-proc.sh/' -e 's/nproc-quota.sh/nproc-quota-systemd.sh/'  tests/local.mk
