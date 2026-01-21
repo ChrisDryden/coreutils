@@ -7,8 +7,9 @@ use std::ffi::OsString;
 use std::io::stdout;
 use std::ops::ControlFlow;
 use uucore::display::Quotable;
-use uucore::error::{UResult, UUsageError};
+use uucore::error::{UResult, USimpleError, UUsageError};
 use uucore::format::{FormatArgument, FormatArguments, FormatItem, parse_spec_and_escape};
+use uucore::signals::stdout_was_closed;
 use uucore::translate;
 use uucore::{format_usage, os_str_as_bytes, show_warning};
 
@@ -28,6 +29,11 @@ pub fn uumain(args: impl uucore::Args) -> UResult<()> {
         .get_one::<OsString>(options::FORMAT)
         .ok_or_else(|| UUsageError::new(1, translate!("printf-error-missing-operand")))?;
     let format = os_str_as_bytes(format)?;
+
+    // Fail if stdout was closed and we have output to produce
+    if stdout_was_closed() && !format.is_empty() {
+        return Err(USimpleError::new(1, "write error"));
+    }
 
     let values: Vec<_> = match matches.get_many::<OsString>(options::ARGUMENT) {
         Some(s) => s

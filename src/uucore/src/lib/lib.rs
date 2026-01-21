@@ -215,8 +215,12 @@ macro_rules! bin {
             // execute utility code
             let code = $util::uumain(uucore::args_os());
             // (defensively) flush stdout for utility prior to exit; see <https://github.com/rust-lang/rust/issues/23818>
-            if let Err(e) = std::io::stdout().flush() {
-                eprintln!("Error flushing stdout: {e}");
+            // Skip flush if stdout was closed at startup - Rust reopens it as /dev/null
+            // but we should not fail when the original stdout was intentionally closed
+            if !uucore::signals::stdout_was_closed() {
+                if let Err(e) = std::io::stdout().flush() {
+                    eprintln!("Error flushing stdout: {e}");
+                }
             }
 
             std::process::exit(code);

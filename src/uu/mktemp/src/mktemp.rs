@@ -8,8 +8,9 @@
 use clap::builder::{TypedValueParser, ValueParserFactory};
 use clap::{Arg, ArgAction, ArgMatches, Command};
 use uucore::display::{Quotable, println_verbatim};
-use uucore::error::{FromIo, UError, UResult, UUsageError};
+use uucore::error::{FromIo, UError, UResult, USimpleError, UUsageError};
 use uucore::format_usage;
+use uucore::signals::stdout_was_closed;
 use uucore::translate;
 
 use std::env;
@@ -348,6 +349,11 @@ impl ValueParserFactory for OptionalPathBufParser {
 
 #[uucore::main]
 pub fn uumain(args: impl uucore::Args) -> UResult<()> {
+    // mktemp always outputs the created path, so fail early if stdout is closed
+    if stdout_was_closed() {
+        return Err(USimpleError::new(1, "write error"));
+    }
+
     let args: Vec<_> = args.collect();
     let matches = match uu_app().try_get_matches_from(&args) {
         Ok(m) => m,

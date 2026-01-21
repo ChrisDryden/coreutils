@@ -26,7 +26,7 @@ use thiserror::Error;
 
 use platform::copy_on_write;
 use uucore::display::Quotable;
-use uucore::error::{UError, UResult, UUsageError, set_exit_code};
+use uucore::error::{UError, UResult, USimpleError, UUsageError, set_exit_code};
 #[cfg(unix)]
 use uucore::fs::make_fifo;
 use uucore::fs::{
@@ -34,6 +34,7 @@ use uucore::fs::{
     get_filename, is_symlink_loop, normalize_path, path_ends_with_terminator,
     paths_refer_to_same_file,
 };
+use uucore::signals::stdout_was_closed;
 use uucore::{backup_control, update_control};
 // These are exposed for projects (e.g. nushell) that want to create an `Options` value, which
 // requires these enum.
@@ -812,6 +813,11 @@ pub fn uumain(args: impl uucore::Args) -> UResult<()> {
     let matches = uucore::clap_localization::handle_clap_result(uu_app(), args)?;
 
     let options = Options::from_matches(&matches)?;
+
+    // Fail if stdout was closed and verbose mode is enabled
+    if stdout_was_closed() && options.verbose {
+        return Err(USimpleError::new(1, "write error"));
+    }
 
     if options.overwrite == OverwriteMode::NoClobber && options.backup != BackupMode::None {
         return Err(UUsageError::new(
