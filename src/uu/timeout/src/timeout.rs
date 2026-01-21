@@ -9,7 +9,7 @@ mod status;
 
 use crate::status::ExitStatus;
 use clap::{Arg, ArgAction, Command};
-use std::io::ErrorKind;
+use std::io::{ErrorKind, Write};
 use std::os::unix::process::ExitStatusExt;
 use std::process::{self, Child, Stdio};
 use std::sync::atomic::{self, AtomicBool};
@@ -21,7 +21,7 @@ use uucore::process::ChildExt;
 use uucore::translate;
 
 use uucore::{
-    format_usage, show_error,
+    format_usage,
     signals::{signal_by_name_or_value, signal_name_by_value},
 };
 
@@ -228,10 +228,13 @@ fn report_if_verbose(signal: usize, cmd: &str, verbose: bool) {
         } else {
             signal_name_by_value(signal).unwrap().to_string()
         };
-        show_error!(
-            "{}",
+        let mut stderr = std::io::stderr();
+        let _ = writeln!(
+            stderr,
+            "timeout: {}",
             translate!("timeout-verbose-sending-signal", "signal" => s, "command" => cmd.quote())
         );
+        let _ = stderr.flush();
     }
 }
 
@@ -465,6 +468,8 @@ fn timeout(
             }
         }
         Err(_) => {
+            // We're going to return ERR_EXIT_STATUS regardless of
+            // whether `send_signal()` succeeds or fails
             send_signal(process, signal, foreground);
             Err(ExitStatus::TimeoutFailed.into())
         }
