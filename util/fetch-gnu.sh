@@ -5,6 +5,9 @@ git clone --depth 1 "${repo}" gnu-temp
 mv gnu-temp/* gnu-temp/.* . 2>/dev/null || true
 rm -rf gnu-temp
 
+# Generate configure script (release tarballs have this pre-generated)
+./bootstrap
+
 # Replace tests not compatible with our binaries
 sed -i -e 's/no-mtab-status.sh/no-mtab-status-masked-proc.sh/' -e 's/nproc-quota.sh/nproc-quota-systemd.sh/'  tests/local.mk
 # Add tac-continue.sh to root tests (it requires root to mount tmpfs)
