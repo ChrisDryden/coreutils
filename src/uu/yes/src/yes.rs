@@ -27,7 +27,6 @@ pub fn uumain(args: impl uucore::Args) -> UResult<()> {
 
     match exec(&buffer) {
         Ok(()) => Ok(()),
-        Err(err) if err.kind() == io::ErrorKind::BrokenPipe => Ok(()),
         Err(err) => Err(USimpleError::new(
             1,
             translate!("yes-error-standard-output", "error" => err),
