@@ -114,8 +114,10 @@ noxfer
 ofile
 oflag
 oflags
+pdeathsig
 peekable
 performant
+prctl
 precompiled
 precompute
 preload
@@ -147,6 +149,7 @@ chld
 SIGCHLD
 sigchld
 siginfo
+signame
 SIGTTIN
 sigttin
 SIGTTOU

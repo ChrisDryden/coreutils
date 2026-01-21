@@ -363,3 +363,6 @@ sed -i 's/echo "changing security context/echo "chcon: changing security context
 # * the selinux crate is handling errors
 # * the test says "maybe we should not fail when no context available"
 sed -i -e "s|returns_ 1||g" tests/cp/no-ctx.sh
+
+# Add debug logging to timeout.sh test for CI debugging
+sed -i '/^require_trap_signame_$/a set -x' tests/timeout/timeout.sh
