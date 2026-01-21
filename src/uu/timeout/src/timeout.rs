@@ -381,6 +381,9 @@ fn timeout(
         }
     }
 
+    install_sigchld();
+    install_signal_handlers(signal);
+
     let process = &mut cmd_builder.spawn().map_err(|err| {
         let status_code = match err.kind() {
             ErrorKind::NotFound => ExitStatus::CommandNotFound.into(),
@@ -392,8 +395,6 @@ fn timeout(
             translate!("timeout-error-failed-to-execute-process", "error" => err),
         )
     })?;
-    install_sigchld();
-    install_signal_handlers(signal);
 
     // Wait for the child process for the specified time period.
     //

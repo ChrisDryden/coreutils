@@ -235,3 +235,46 @@ fn test_command_cannot_invoke() {
     // Try to execute a directory (should give permission denied or similar)
     new_ucmd!().args(&["1", "/"]).fails_with_code(126);
 }
+
+#[test]
+#[cfg(unix)]
+fn test_sigchld_ignored_by_parent() {
+    new_ucmd!()
+        .args(&["10", "sh", "-c", "trap '' CHLD; exec timeout 1 true"])
+        .succeeds();
+}
+
+#[test]
+#[cfg(unix)]
+fn test_with_background_child() {
+    new_ucmd!()
+        .args(&[".5", "sh", "-c", "sleep .1 & sleep 2"])
+        .fails_with_code(124)
+        .no_stdout();
+}
+
+#[test]
+#[cfg(unix)]
+fn test_forward_sigint_to_child() {
+    let mut cmd = new_ucmd!()
+        .args(&[
+            "10",
+            "sh",
+            "-c",
+            "trap 'echo got_int; exit 42' INT; sleep 5",
+        ])
+        .run_no_wait();
+    cmd.delay(100);
+    cmd.kill_with_custom_signal(nix::sys::signal::Signal::SIGINT);
+    cmd.make_assertion()
+        .is_not_alive()
+        .with_current_output()
+        .stdout_contains("got_int");
+}
+
+#[test]
+fn test_foreground_signal0_kill_after() {
+    new_ucmd!()
+        .args(&["--foreground", "-s0", "-k.1", ".1", "sleep", "10"])
+        .fails_with_code(137);
+}
