@@ -1749,7 +1749,16 @@ fn emit_debug_warnings(
                         translate!("sort-warning-separator-plus", "sep" => "+")
                     );
                 }
-                _ => {}
+                _ => {
+                    let grouping_sep = i18n::decimal::locale_grouping_separator();
+                    if grouping_sep.len() == 1 && grouping_sep.as_bytes()[0] == sep {
+                        show_error!(
+                            "{}",
+                            translate!("sort-warning-separator-grouping", "sep" => grouping_sep)
+                        );
+                        suppress_decimal_warning = true;
+                    }
+                }
             }
         }
 
@@ -1954,7 +1963,11 @@ pub fn uumain(args: impl uucore::Args) -> UResult<()> {
     let ignore_non_printing = matches.get_flag(options::IGNORE_NONPRINTING);
     let ignore_case = matches.get_flag(options::IGNORE_CASE);
 
-    if ordering_incompatible(mode_flags, dictionary_order, ignore_non_printing) {
+    // Check for incompatible global options only when no explicit keys are provided.
+    // With explicit keys (-k), conflicting global modes are allowed (they just get ignored).
+    if !matches.contains_id(options::KEY)
+        && ordering_incompatible(mode_flags, dictionary_order, ignore_non_printing)
+    {
         let opts = ordering_opts_string(
             mode_flags,
             dictionary_order,
