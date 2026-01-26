@@ -14,9 +14,6 @@ command -v greadlink && readlink(){ greadlink "$@";} # todo: use our readlink fo
 command -v gsed && sed(){ gsed "$@";}
 SED=$(command -v gsed||command -v sed) # for find...exec...
 
-SYSTEM_TIMEOUT=$(command -v timeout)
-SYSTEM_YES=$(command -v yes)
-
 ME="${0}"
 ME_dir="$(dirname -- "$(readlink -fm -- "${ME}")")"
 REPO_main_dir="$(dirname -- "${ME_dir}")"
@@ -127,8 +124,8 @@ else
     CFLAGS="${CFLAGS} -pipe -O0 -s" ./configure -C --quiet --disable-gcc-warnings --disable-nls --disable-dependency-tracking --disable-bold-man-page-references \
       --enable-single-binary=symlinks --enable-install-program="arch,kill,uptime,hostname" \
       "$([ "${SELINUX_ENABLED}" = 1 ] && echo --with-selinux || echo --without-selinux)"
-    #Add timeout to to protect against hangs
-    sed -i 's|^"\$@|'"${SYSTEM_TIMEOUT}"' 600 "\$@|' build-aux/test-driver
+    # Add timeout to protect against hangs
+    sed -i 's|^"\$@|timeout 600 "\$@|' build-aux/test-driver
     # Use a better diff
     sed -i 's|diff -c|diff -u|g' tests/Coreutils.pm
 
@@ -186,13 +183,6 @@ sed -i "s|cannot create regular file 'no-such/': Not a directory|'no-such/' is n
 
 # Our message is better
 sed -i "s|warning: unrecognized escape|warning: incomplete hex escape|" tests/stat/stat-printf.pl
-
-sed -i 's|timeout |'"${SYSTEM_TIMEOUT}"' |' tests/tail/follow-stdin.sh
-
-# trap_sigpipe_or_skip_ fails with uutils tools because of a bug in
-# timeout/yes (https://github.com/uutils/coreutils/issues/7252), so we use
-# system's yes/timeout to make sure the tests run (instead of being skipped).
-sed -i 's|\(trap .* \)timeout\( .* \)yes|'"\1${SYSTEM_TIMEOUT}\2${SYSTEM_YES}"'|' init.cfg
 
 # Remove dup of /usr/bin/ and /usr/local/bin/ when executed several times
 grep -rlE '/usr/bin/\s?/usr/bin' init.cfg tests/* | xargs -r "${SED}" -Ei 's|/usr/bin/\s?/usr/bin/|/usr/bin/|g'
@@ -295,13 +285,6 @@ sed -i -e "s/du: invalid -t argument/du: invalid --threshold argument/" -e "s/du
 sed -i -e "s|Try '\$prog --help' for more information.\\\n||" tests/du/files0-from.pl
 sed -i -e "s|-: No such file or directory|cannot access '-': No such file or directory|g" tests/du/files0-from.pl
 
-# Skip the move-dir-while-traversing test - our implementation uses safe traversal with openat()
-# which avoids the TOCTOU race condition that this test tries to trigger. The test uses inotify
-# to detect when du opens a directory path and moves it to cause an error, but our openat-based
-# implementation doesn't trigger inotify events on the full path, preventing the race condition.
-# This is actually better behavior - we're immune to this class of filesystem race attacks.
-sed -i '1s/^/exit 0  # Skip test - uutils du uses safe traversal that prevents this race condition\n/' tests/du/move-dir-while-traversing.sh
-
 awk 'BEGIN {count=0} /compare exp out2/ && count < 6 {sub(/compare exp out2/, "grep -q \"cannot be used with\" out2"); count++} 1' tests/df/df-output.sh > tests/df/df-output.sh.tmp && mv tests/df/df-output.sh.tmp tests/df/df-output.sh
 
 # with ls --dired, in case of error, we have a slightly different error position
@@ -334,23 +317,6 @@ sed -i -E 's/\^\[\[([1-9]m)/^[[0\1/g;  s/\^\[\[m/^[[0m/g' tests/ls/color-norm.sh
 # It says in the test itself that having more than one reset is a bug, so we
 # don't need to replicate that behavior.
 sed -i -E 's/(\^\[\[0m)+/\^\[\[0m/g' tests/ls/color-norm.sh
-
-# GNU's ls seems to output color codes in the order given in the environment
-# variable, but our ls seems to output them in a predefined order. Nevertheless,
-# the order doesn't matter, so it's okay.
-sed -i  's/44;37/37;44/' tests/ls/multihardlink.sh
-
-# Just like mentioned in the previous patch, GNU's ls output color codes in the
-# same way it is specified in the environment variable, but our ls emits them
-# differently. In this case, the color code is set to 0;31;42, and our ls would
-# ignore the 0; part. This would have been a bug if we output color codes
-# individually, for example, ^[[31^[[42 instead of ^[[31;42, but we don't do
-# that anywhere in our implementation, and it looks like GNU's ls also doesn't
-# do that. So, it's okay to ignore the zero.
-sed -i  "s/color_code='0;31;42'/color_code='31;42'/" tests/ls/color-clear-to-eol.sh
-
-# patching this because of the same reason as the last one.
-sed -i  "s/color_code='0;31;42'/color_code='31;42'/" tests/ls/quote-align.sh
 
 # Slightly different error message
 sed -i 's/not supported/unexpected argument/' tests/mv/mv-exchange.sh
