@@ -220,15 +220,18 @@ sed -i -e "s|---dis ||g" tests/tail/overlay-headers.sh
 # GNU test checks for race between initial read and watch setup. Rust sets up
 # watchers before initial read, so no exact equivalent exists. We break at
 # watch_with_parent as the closest semantic match.
-# "set auto-load no" prevents Rust debug script auto-load warnings.
-# setsid isolates sleep from process group signals (fixes CI where sleep was dying).
-# GDB needs full path (break $break_src:$break_line) for Rust sources.
+# - "set auto-load no" prevents Rust debug script auto-load warnings.
+# - setsid isolates sleep from process group signals (fixes CI where sleep was dying).
+# - Full path required: "break $break_line" alone breaks at wrong file (uucore/lib.rs:275
+#   instead of tail/watch.rs:275). Must use "break $break_src:$break_line".
+# - set -x enables verbose logging for debugging CI failures.
 "${SED}" -i \
     -e "s|break_src=\"\$abs_top_srcdir/src/tail.c\"|break_src=\"${path_UUTILS}/src/uu/tail/src/follow/watch.rs\"|" \
     -e 's|break_line=$(grep -n ^tail_forever_inotify "$break_src")|break_line=$(grep -n "watcher_rx.watch_with_parent" "$break_src")|' \
     -e 's|gdb -nx --batch-silent|gdb -nx --batch-silent -iex "set auto-load no"|g' \
     -e 's|"break \$break_line"|"break \$break_src:\$break_line"|g' \
     -e 's|env sleep 10|setsid sleep 300|g' \
+    -e '1s|^|set -x\n|' \
     tests/tail/inotify-race.sh tests/tail/inotify-race2.sh
 
 # Do not FAIL, just do a regular ERROR
