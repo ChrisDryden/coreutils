@@ -11,7 +11,7 @@ use std::collections::HashSet;
 use std::env;
 use std::ffi::{OsStr, OsString};
 use std::fs::{self, DirEntry, File, Metadata};
-use std::io::{BufRead, BufReader, stdout};
+use std::io::{BufRead, BufReader, BufWriter, Write, stdout};
 #[cfg(not(windows))]
 use std::os::unix::fs::MetadataExt;
 #[cfg(windows)]
@@ -21,7 +21,7 @@ use std::str::FromStr;
 use std::sync::mpsc;
 use std::thread;
 use thiserror::Error;
-use uucore::display::{Quotable, print_verbatim};
+use uucore::display::Quotable;
 use uucore::error::{FromIo, UError, UResult, USimpleError, set_exit_code};
 use uucore::fsext::{MetadataTimeField, metadata_get_time};
 use uucore::line_ending::LineEnding;
@@ -81,6 +81,7 @@ struct TraversalOptions {
     count_links: bool,
     verbose: bool,
     excludes: Vec<Pattern>,
+    max_depth: Option<usize>,
 }
 
 struct StatPrinter {
@@ -95,6 +96,7 @@ struct StatPrinter {
     line_ending: LineEnding,
     summarize: bool,
     total_text: String,
+    writer: BufWriter<std::io::Stdout>,
 }
 
 #[derive(PartialEq, Clone)]
@@ -119,11 +121,12 @@ struct FileInfo {
 
 struct Stat {
     path: PathBuf,
+    is_dir: bool,
     size: u64,
     blocks: u64,
     inodes: u64,
     inode: Option<FileInfo>,
-    metadata: Metadata,
+    metadata: Option<Metadata>,
 }
 
 impl Stat {
@@ -152,14 +155,16 @@ impl Stat {
 
         let file_info = get_file_info(path, &metadata);
         let blocks = get_blocks(path, &metadata);
+        let is_dir = metadata.is_dir();
 
         Ok(Self {
             path: path.to_path_buf(),
-            size: if metadata.is_dir() { 0 } else { metadata.len() },
+            is_dir,
+            size: if is_dir { 0 } else { metadata.len() },
             blocks,
             inodes: 1,
             inode: file_info,
-            metadata,
+            metadata: Some(metadata),
         })
     }
 
@@ -182,18 +187,16 @@ impl Stat {
         // This is still needed for compatibility but should work since we're dealing with
         // the root path which should be accessible
         let std_metadata = fs::symlink_metadata(full_path)?;
+        let is_dir = safe_metadata.is_dir();
 
         Ok(Self {
             path: full_path.to_path_buf(),
-            size: if safe_metadata.is_dir() {
-                0
-            } else {
-                safe_metadata.len()
-            },
+            is_dir,
+            size: if is_dir { 0 } else { safe_metadata.len() },
             blocks,
             inodes: 1,
             inode: file_info_option,
-            metadata: std_metadata,
+            metadata: Some(std_metadata),
         })
     }
 }
@@ -317,26 +320,16 @@ fn safe_du(
                     dev_id: file_info.device(),
                 });
                 let blocks = safe_metadata.blocks();
-
-                // For compatibility, still try to get std::fs::Metadata
-                // but fallback to a minimal approach if it fails
-                let std_metadata = fs::symlink_metadata(path).unwrap_or_else(|_| {
-                    // If we can't get std metadata, create a minimal fake one
-                    // This should rarely happen but provides a fallback
-                    fs::symlink_metadata("/").expect("root should be accessible")
-                });
+                let is_dir = safe_metadata.is_dir();
 
                 Stat {
                     path: path.to_path_buf(),
-                    size: if safe_metadata.is_dir() {
-                        0
-                    } else {
-                        safe_metadata.len()
-                    },
+                    is_dir,
+                    size: if is_dir { 0 } else { safe_metadata.len() },
                     blocks,
                     inodes: 1,
                     inode: file_info_option,
-                    metadata: std_metadata,
+                    metadata: None,
                 }
             }
             Err(e) => {
@@ -390,7 +383,7 @@ fn safe_du(
             }
         }
     };
-    if !my_stat.metadata.is_dir() {
+    if !my_stat.is_dir {
         return Ok(my_stat);
     }
 
@@ -461,44 +454,15 @@ fn safe_du(
             dev_id: entry_stat.st_dev as u64,
         });
 
-        // For safe traversal, we need to handle stats differently
-        // We can't use std::fs::Metadata since that requires the full path
-        let this_stat = if is_dir {
-            // For directories, recurse using safe_du
-            Stat {
-                path: entry_path.clone(),
-                size: 0,
-                #[allow(clippy::unnecessary_cast)]
-                blocks: entry_stat.st_blocks as u64,
-                inodes: 1,
-                inode: file_info,
-                // We need a fake metadata - create one from symlink_metadata of parent
-                // This is a workaround since we can't get real metadata without the full path
-                metadata: my_stat.metadata.clone(),
-            }
-        } else {
-            // For files
-            Stat {
-                path: entry_path.clone(),
-                #[allow(clippy::unnecessary_cast)]
-                size: entry_stat.st_size as u64,
-                #[allow(clippy::unnecessary_cast)]
-                blocks: entry_stat.st_blocks as u64,
-                inodes: 1,
-                inode: file_info,
-                metadata: my_stat.metadata.clone(),
-            }
-        };
-
-        // Check excludes
+        // Check excludes before allocating Stat
         for pattern in &options.excludes {
-            if pattern.matches(&this_stat.path.to_string_lossy())
+            if pattern.matches(&entry_path.to_string_lossy())
                 || pattern.matches(&entry_name.to_string_lossy())
             {
                 if options.verbose {
                     println!(
                         "{}",
-                        translate!("du-verbose-ignored", "path" => this_stat.path.quote())
+                        translate!("du-verbose-ignored", "path" => entry_path.quote())
                     );
                 }
                 continue 'file_loop;
@@ -506,7 +470,7 @@ fn safe_du(
         }
 
         // Handle inodes
-        if let Some(inode) = this_stat.inode {
+        if let Some(inode) = file_info {
             if seen_inodes.contains(&inode) && !options.count_links {
                 continue;
             }
@@ -516,7 +480,7 @@ fn safe_du(
         // Process directories recursively
         if is_dir {
             if options.one_file_system {
-                if let (Some(this_inode), Some(my_inode)) = (this_stat.inode, my_stat.inode) {
+                if let (Some(this_inode), Some(my_inode)) = (file_info, my_stat.inode) {
                     if this_inode.dev_id != my_inode.dev_id {
                         continue;
                     }
@@ -537,15 +501,33 @@ fn safe_du(
                 my_stat.blocks += this_stat.blocks;
                 my_stat.inodes += this_stat.inodes;
             }
-            print_tx.send(Ok(StatPrintInfo {
-                stat: this_stat,
-                depth: depth + 1,
-            }))?;
+            // Only send if within max_depth (or no max_depth set)
+            if options.max_depth.is_none_or(|max| depth + 1 <= max) {
+                print_tx.send(Ok(StatPrintInfo {
+                    stat: this_stat,
+                    depth: depth + 1,
+                }))?;
+            }
         } else {
-            my_stat.size += this_stat.size;
-            my_stat.blocks += this_stat.blocks;
+            // For files, use entry_stat directly to avoid allocations
+            #[allow(clippy::unnecessary_cast)]
+            {
+                my_stat.size += entry_stat.st_size as u64;
+                my_stat.blocks += entry_stat.st_blocks as u64;
+            }
             my_stat.inodes += 1;
             if options.all {
+                // Only create Stat when we need to print
+                #[allow(clippy::unnecessary_cast)]
+                let this_stat = Stat {
+                    path: entry_path,
+                    is_dir: false,
+                    size: entry_stat.st_size as u64,
+                    blocks: entry_stat.st_blocks as u64,
+                    inodes: 1,
+                    inode: file_info,
+                    metadata: None,
+                };
                 print_tx.send(Ok(StatPrintInfo {
                     stat: this_stat,
                     depth: depth + 1,
@@ -578,16 +560,12 @@ fn du_regular(
     const MAX_SYMLINK_DEPTH: usize = 40;
 
     // Add current directory to ancestors if it's a directory
-    let my_inode = if my_stat.metadata.is_dir() {
-        my_stat.inode
-    } else {
-        None
-    };
+    let my_inode = if my_stat.is_dir { my_stat.inode } else { None };
 
     if let Some(inode) = my_inode {
         ancestors.insert(inode);
     }
-    if my_stat.metadata.is_dir() {
+    if my_stat.is_dir {
         let read = match fs::read_dir(&my_stat.path) {
             Ok(read) => read,
             Err(e) => {
@@ -629,10 +607,7 @@ fn du_regular(
                     match Stat::new(&entry_path, Some(&entry), options) {
                         Ok(this_stat) => {
                             // Check if symlink with -L points to an ancestor (cycle detection)
-                            if is_symlink
-                                && options.dereference == Deref::All
-                                && this_stat.metadata.is_dir()
-                            {
+                            if is_symlink && options.dereference == Deref::All && this_stat.is_dir {
                                 if let Some(inode) = this_stat.inode {
                                     if ancestors.contains(&inode) {
                                         // This symlink points to an ancestor directory - skip to avoid cycle
@@ -671,7 +646,7 @@ fn du_regular(
                                 seen_inodes.insert(inode);
                             }
 
-                            if this_stat.metadata.is_dir() {
+                            if this_stat.is_dir {
                                 if options.one_file_system {
                                     if let (Some(this_inode), Some(my_inode)) =
                                         (this_stat.inode, my_stat.inode)
@@ -697,15 +672,21 @@ fn du_regular(
                                     my_stat.blocks += this_stat.blocks;
                                     my_stat.inodes += this_stat.inodes;
                                 }
-                                print_tx.send(Ok(StatPrintInfo {
-                                    stat: this_stat,
-                                    depth: depth + 1,
-                                }))?;
+                                // Only send if within max_depth
+                                if options.max_depth.is_none_or(|max| depth + 1 <= max) {
+                                    print_tx.send(Ok(StatPrintInfo {
+                                        stat: this_stat,
+                                        depth: depth + 1,
+                                    }))?;
+                                }
                             } else {
                                 my_stat.size += this_stat.size;
                                 my_stat.blocks += this_stat.blocks;
                                 my_stat.inodes += 1;
-                                if options.all {
+                                // Only send if -a flag and within max_depth
+                                if options.all
+                                    && options.max_depth.is_none_or(|max| depth + 1 <= max)
+                                {
                                     print_tx.send(Ok(StatPrintInfo {
                                         stat: this_stat,
                                         depth: depth + 1,
@@ -816,7 +797,7 @@ impl StatPrinter {
         }
     }
 
-    fn print_stats(&self, rx: &mpsc::Receiver<UResult<StatPrintInfo>>) -> UResult<()> {
+    fn print_stats(&mut self, rx: &mpsc::Receiver<UResult<StatPrintInfo>>) -> UResult<()> {
         let mut grand_total = 0;
         loop {
             let received = rx.recv();
@@ -848,8 +829,13 @@ impl StatPrinter {
         }
 
         if self.total {
-            print!("{}\t{}", self.convert_size(grand_total), self.total_text);
-            print!("{}", self.line_ending);
+            write!(
+                self.writer,
+                "{}\t{}",
+                self.convert_size(grand_total),
+                self.total_text
+            )?;
+            write!(self.writer, "{}", self.line_ending)?;
         }
 
         Ok(())
@@ -876,27 +862,38 @@ impl StatPrinter {
         }
     }
 
-    fn print_stat(&self, stat: &Stat, size: u64) -> UResult<()> {
-        print!("{}\t", self.convert_size(size));
+    fn print_stat(&mut self, stat: &Stat, size: u64) -> UResult<()> {
+        write!(self.writer, "{}\t", self.convert_size(size))?;
 
         if let Some(md_time) = &self.time {
-            if let Some(time) = metadata_get_time(&stat.metadata, *md_time) {
-                format_system_time(
-                    &mut stdout(),
-                    time,
-                    &self.time_format,
-                    FormatSystemTimeFallback::IntegerError,
-                )?;
-                print!("\t");
+            if let Some(ref metadata) = stat.metadata {
+                if let Some(time) = metadata_get_time(metadata, *md_time) {
+                    format_system_time(
+                        &mut self.writer,
+                        time,
+                        &self.time_format,
+                        FormatSystemTimeFallback::IntegerError,
+                    )?;
+                    write!(self.writer, "\t")?;
+                } else {
+                    write!(self.writer, "???\t")?;
+                }
             } else {
-                print!("???\t");
+                write!(self.writer, "???\t")?;
             }
         }
 
-        print_verbatim(&stat.path).unwrap();
-        print!("{}", self.line_ending);
+        self.writer
+            .write_all(stat.path.as_os_str().as_encoded_bytes())?;
+        write!(self.writer, "{}", self.line_ending)?;
 
         Ok(())
+    }
+}
+
+impl Drop for StatPrinter {
+    fn drop(&mut self) {
+        let _ = self.writer.flush();
     }
 }
 
@@ -1038,6 +1035,8 @@ pub fn uumain(args: impl uucore::Args) -> UResult<()> {
         count_links,
         verbose: matches.get_flag(options::VERBOSE),
         excludes: build_exclude_patterns(&matches)?,
+        // For summarize mode, treat as max_depth=0 to avoid sending intermediate results
+        max_depth: if summarize { Some(0) } else { max_depth },
     };
 
     let time_format = if time.is_some() {
@@ -1046,7 +1045,7 @@ pub fn uumain(args: impl uucore::Args) -> UResult<()> {
         format::LONG_ISO.to_string()
     };
 
-    let stat_printer = StatPrinter {
+    let mut stat_printer = StatPrinter {
         max_depth,
         size_format,
         summarize,
@@ -1065,6 +1064,7 @@ pub fn uumain(args: impl uucore::Args) -> UResult<()> {
         time_format,
         line_ending: LineEnding::from_zero_flag(matches.get_flag(options::NULL)),
         total_text: translate!("du-total"),
+        writer: BufWriter::with_capacity(65536, stdout()),
     };
 
     if stat_printer.inodes

@@ -20,9 +20,7 @@ use std::os::unix::ffi::OsStrExt;
 use std::os::unix::io::{AsFd, AsRawFd, BorrowedFd, FromRawFd, OwnedFd, RawFd};
 use std::path::{Path, PathBuf};
 
-use nix::dir::Dir;
 use nix::fcntl::{OFlag, openat};
-use nix::libc;
 use nix::sys::stat::{FchmodatFlags, FileStat, Mode, fchmodat, fstatat};
 use nix::unistd::{Gid, Uid, UnlinkatFlags, fchown, fchownat, unlinkat};
 use os_display::Quotable;
@@ -79,19 +77,47 @@ impl From<SafeTraversalError> for io::Error {
     }
 }
 
-// Helper function to read directory entries using nix
 fn read_dir_entries(fd: &OwnedFd) -> io::Result<Vec<OsString>> {
     let mut entries = Vec::new();
+    let mut buf = [0u8; 8192];
 
-    // Duplicate the fd for Dir (it takes ownership)
-    let dup_fd = nix::unistd::dup(fd).map_err(|e| io::Error::from_raw_os_error(e as i32))?;
-    let mut dir = Dir::from_fd(dup_fd).map_err(|e| io::Error::from_raw_os_error(e as i32))?;
-    for entry_result in dir.iter() {
-        let entry = entry_result.map_err(|e| io::Error::from_raw_os_error(e as i32))?;
-        let name = entry.file_name();
-        let name_os = OsStr::from_bytes(name.to_bytes());
-        if name_os != "." && name_os != ".." {
-            entries.push(name_os.to_os_string());
+    loop {
+        // SAFETY: getdents64 reads directory entries into the provided buffer.
+        // We pass a valid fd, a properly aligned buffer, and its size.
+        let nread = unsafe {
+            libc::syscall(
+                libc::SYS_getdents64,
+                fd.as_raw_fd(),
+                buf.as_mut_ptr(),
+                buf.len(),
+            )
+        };
+
+        if nread < 0 {
+            return Err(io::Error::last_os_error());
+        }
+        if nread == 0 {
+            break;
+        }
+
+        let mut offset = 0usize;
+        while offset < nread as usize {
+            // SAFETY: We're reading a linux_dirent64 structure from the buffer.
+            // The kernel guarantees the structure is properly formatted.
+            let dirent = unsafe { &*(buf.as_ptr().add(offset) as *const libc::dirent64) };
+            let reclen = dirent.d_reclen as usize;
+
+            // d_name is a null-terminated string
+            let name_ptr = dirent.d_name.as_ptr();
+            // SAFETY: d_name is guaranteed to be null-terminated by the kernel
+            let name_cstr = unsafe { std::ffi::CStr::from_ptr(name_ptr) };
+            let name = name_cstr.to_bytes();
+
+            if name != b"." && name != b".." {
+                entries.push(OsStr::from_bytes(name).to_os_string());
+            }
+
+            offset += reclen;
         }
     }
 

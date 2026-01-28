@@ -82,7 +82,7 @@ impl LineNumber {
 #[derive(Error, Debug)]
 enum CatError {
     /// Wrapper around `io::Error`
-    #[error("{0}")]
+    #[error("{}", uucore::error::strip_errno(.0))]
     Io(#[from] io::Error),
     /// Wrapper around `nix::Error`
     #[cfg(any(target_os = "linux", target_os = "android"))]

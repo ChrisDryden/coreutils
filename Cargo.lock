@@ -4463,6 +4463,7 @@ dependencies = [
  "num-traits",
  "os_display",
  "procfs",
+ "rustix",
  "selinux",
  "sha1",
  "sha2",

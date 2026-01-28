@@ -92,7 +92,6 @@ thiserror = { workspace = true }
 
 [target.'cfg(unix)'.dependencies]
 nix = { workspace = true, features = [
-  "dir",
   "fs",
   "poll",
   "signal",
@@ -100,6 +99,7 @@ nix = { workspace = true, features = [
   "user",
   "zerocopy",
 ] }
+rustix = { workspace = true }
 walkdir = { workspace = true, optional = true }
 xattr = { workspace = true, optional = true }
 
