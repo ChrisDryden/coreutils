@@ -1096,7 +1096,7 @@ jobs:
         path: ${{ steps.vars.outputs.TEST_SUMMARY_FILE }}
 
   coverage:
-    name: Code Coverage
+    name: Code Coverage (run ${{ matrix.job.run }})
     runs-on: ${{ matrix.job.os }}
     timeout-minutes: 90
     env:
@@ -1107,11 +1107,16 @@ jobs:
       fail-fast: false
       matrix:
         job:
-          - { os: ubuntu-latest  , features: unix, toolchain: nightly }
-          # FIXME: Re-enable macos code coverage
-          # - { os: macos-latest   , features: macos, toolchain: nightly }
-          # FIXME: Re-enable Code Coverage on windows, which currently fails due to "profiler_builtins". See #6686.
-          # - { os: windows-latest , features: windows, toolchain: nightly-x86_64-pc-windows-gnu }
+          - { os: ubuntu-latest  , features: unix, toolchain: nightly, run: 1 }
+          - { os: ubuntu-latest  , features: unix, toolchain: nightly, run: 2 }
+          - { os: ubuntu-latest  , features: unix, toolchain: nightly, run: 3 }
+          - { os: ubuntu-latest  , features: unix, toolchain: nightly, run: 4 }
+          - { os: ubuntu-latest  , features: unix, toolchain: nightly, run: 5 }
+          - { os: ubuntu-latest  , features: unix, toolchain: nightly, run: 6 }
+          - { os: ubuntu-latest  , features: unix, toolchain: nightly, run: 7 }
+          - { os: ubuntu-latest  , features: unix, toolchain: nightly, run: 8 }
+          - { os: ubuntu-latest  , features: unix, toolchain: nightly, run: 9 }
+          - { os: ubuntu-latest  , features: unix, toolchain: nightly, run: 10 }
     steps:
     - uses: actions/checkout@v6
     - uses: dtolnay/rust-toolchain@master
