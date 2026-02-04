@@ -450,10 +450,33 @@ impl CmdResult {
     /// asserts that the command resulted in a success (zero) status code
     #[track_caller]
     pub fn success(&self) -> &Self {
+        #[cfg(unix)]
+        let signal_info = self
+            .exit_status
+            .and_then(|e| {
+                use std::os::unix::process::ExitStatusExt;
+                e.signal().map(|sig| {
+                    let signal_name = match sig {
+                        13 => "SIGPIPE",
+                        2 => "SIGINT",
+                        15 => "SIGTERM",
+                        9 => "SIGKILL",
+                        11 => "SIGSEGV",
+                        _ => "UNKNOWN",
+                    };
+                    format!(" (killed by signal {} - {})", sig, signal_name)
+                })
+            })
+            .unwrap_or_default();
+
+        #[cfg(not(unix))]
+        let signal_info = String::new();
+
         assert!(
             self.succeeded(),
-            "Command was expected to succeed. code: {:?}\nstdout = {}\n stderr = {}",
+            "Command was expected to succeed. code: {:?}{}\nstdout = {}\n stderr = {}",
             self.exit_status.and_then(|e| e.code()),
+            signal_info,
             self.stdout_str(),
             self.stderr_str()
         );
