@@ -1,5 +1,5 @@
 #!/bin/bash -e
-ver="9.9"
+ver="9.10"
 repo=https://github.com/coreutils/coreutils
 curl -L "${repo}/releases/download/v${ver}/coreutils-${ver}.tar.xz" | tar --strip-components=1 -xJf -
 
