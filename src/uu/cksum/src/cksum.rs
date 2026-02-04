@@ -71,8 +71,6 @@ fn handle_tag_text_binary_flags<S: AsRef<OsStr>>(
             binary = false;
         } else if arg == "--tag" {
             tag = true;
-            binary = false;
-            text = false;
         } else if arg == "--untagged" {
             tag = false;
         }
