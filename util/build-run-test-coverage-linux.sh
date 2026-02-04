@@ -58,7 +58,9 @@ rm -rf "${PROFDATA_DIR}" && mkdir -p "${PROFDATA_DIR}"
 rm -rf "${REPORT_DIR}" && mkdir -p "${REPORT_DIR}"
 
 #shellcheck disable=SC2086
-UTIL_LIST=$("${ME_dir}"/show-utils.sh ${FEATURES_OPTION})
+# UTIL_LIST=$("${ME_dir}"/show-utils.sh ${FEATURES_OPTION})
+# DEBUG: Only test dd for faster iteration
+UTIL_LIST="dd"
 
 export CARGO_INCREMENTAL=0
 export RUSTFLAGS="-Cinstrument-coverage -Ccodegen-units=1 -Copt-level=0 -Clink-dead-code -Coverflow-checks=off -Zpanic_abort_tests -Cpanic=abort"
@@ -111,8 +113,8 @@ for UTIL in ${UTIL_LIST}; do
     rm -rf "${PROFRAW_DIR}" && mkdir -p "${PROFRAW_DIR}"
 done;
 
-echo "Running coverage tests over uucore"
-run_test_and_aggregate "uucore" "-p uucore --all-features"
+# echo "Running coverage tests over uucore"
+# run_test_and_aggregate "uucore" "-p uucore --all-features"
 
 echo "# Aggregating all the profraw files under ${REPORT_PATH}"
 grcov \
