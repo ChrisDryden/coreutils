@@ -2526,13 +2526,30 @@ impl UChild {
         self.close_stdin();
         eprintln!("[TIMING] after close_stdin: {:?}", start.elapsed());
 
+        // If we have custom captured output, we must use wait() instead of wait_with_output()
+        // to avoid a race condition where wait_with_output()'s internal reader threads
+        // close the pipes while the child process is still writing to them, causing SIGPIPE.
+        // The custom CapturedOutput threads will handle reading the output.
+        let has_custom_capture = self.captured_stdout.is_some() || self.captured_stderr.is_some();
+
         let output = if let Some(timeout) = self.timeout {
-            let child = self.raw;
+            let mut child = self.raw;
 
             let (sender, receiver) = mpsc::channel();
             let handle = thread::Builder::new()
                 .name("wait_with_output".to_string())
-                .spawn(move || sender.send(child.wait_with_output()))
+                .spawn(move || {
+                    if has_custom_capture {
+                        // Use wait() to avoid internal reader threads that would race with our custom captures
+                        sender.send(child.wait().map(|status| Output {
+                            status,
+                            stdout: Vec::new(),
+                            stderr: Vec::new(),
+                        }))
+                    } else {
+                        sender.send(child.wait_with_output())
+                    }
+                })
                 .unwrap();
 
             match receiver.recv_timeout(timeout) {
@@ -2552,8 +2569,20 @@ impl UChild {
                 }
             }
         } else {
-            eprintln!("[TIMING] calling wait_with_output: {:?}", start.elapsed());
-            self.raw.wait_with_output()
+            eprintln!(
+                "[TIMING] calling wait/wait_with_output: {:?}",
+                start.elapsed()
+            );
+            if has_custom_capture {
+                // Use wait() to avoid internal reader threads that would race with our custom captures
+                self.raw.wait().map(|status| Output {
+                    status,
+                    stdout: Vec::new(),
+                    stderr: Vec::new(),
+                })
+            } else {
+                self.raw.wait_with_output()
+            }
         };
 
         eprintln!("[TIMING] after wait_with_output: {:?}", start.elapsed());
