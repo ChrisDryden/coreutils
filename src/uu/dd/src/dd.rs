@@ -794,12 +794,7 @@ impl Write for Dest {
                     Err(e) => Err(e),
                 }
             }
-            Self::Stdout(stdout) => {
-                eprintln!("[DD] Writing {} bytes to stdout", buf.len());
-                let result = stdout.write(buf);
-                eprintln!("[DD] Write result: {result:?}");
-                result
-            }
+            Self::Stdout(stdout) => stdout.write(buf),
             #[cfg(unix)]
             Self::Fifo(f) => f.write(buf),
             #[cfg(unix)]
@@ -809,12 +804,7 @@ impl Write for Dest {
 
     fn flush(&mut self) -> io::Result<()> {
         match self {
-            Self::Stdout(stdout) => {
-                eprintln!("[DD] Flushing stdout");
-                let result = stdout.flush();
-                eprintln!("[DD] Flush result: {result:?}");
-                result
-            }
+            Self::Stdout(stdout) => stdout.flush(),
             Self::File(f, _) => f.flush(),
             #[cfg(unix)]
             Self::Fifo(f) => f.flush(),
