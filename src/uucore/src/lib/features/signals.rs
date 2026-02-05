@@ -413,9 +413,12 @@ pub fn signal_name_by_value(signal_value: usize) -> Option<&'static str> {
 /// Restores SIGPIPE to default behavior (process terminates on broken pipe).
 #[cfg(unix)]
 pub fn enable_pipe_errors() -> Result<(), Errno> {
+    eprintln!("[SIGPIPE-DEBUG] enable_pipe_errors() called - setting SIGPIPE to SIG_DFL");
     // We pass the error as is, the return value would just be Ok(SigDfl), so we can safely ignore it.
     // SAFETY: this function is safe as long as we do not use a custom SigHandler -- we use the default one.
-    unsafe { signal(SIGPIPE, SigDfl) }.map(|_| ())
+    let result = unsafe { signal(SIGPIPE, SigDfl) }.map(|_| ());
+    eprintln!("[SIGPIPE-DEBUG] enable_pipe_errors() result: {:?}", result);
+    result
 }
 
 /// Ignores SIGPIPE signal (broken pipe errors are returned instead of terminating).
@@ -423,6 +426,7 @@ pub fn enable_pipe_errors() -> Result<(), Errno> {
 /// broken pipe errors gracefully (e.g., tee with --output-error).
 #[cfg(unix)]
 pub fn disable_pipe_errors() -> Result<(), Errno> {
+    eprintln!("[SIGPIPE-DEBUG] disable_pipe_errors() called - setting SIGPIPE to SIG_IGN");
     // SAFETY: this function is safe as long as we do not use a custom SigHandler -- we use the default one.
     unsafe { signal(SIGPIPE, SigIgn) }.map(|_| ())
 }
@@ -545,13 +549,50 @@ pub const fn stderr_was_closed() -> bool {
 /// Returns whether SIGPIPE was ignored at process startup.
 #[cfg(unix)]
 pub fn sigpipe_was_ignored() -> bool {
-    SIGPIPE_WAS_IGNORED.load(Ordering::Acquire)
+    let was_ignored = SIGPIPE_WAS_IGNORED.load(Ordering::Acquire);
+    eprintln!(
+        "[SIGPIPE-DEBUG] sigpipe_was_ignored() returning: {}",
+        was_ignored
+    );
+    was_ignored
 }
 
 #[cfg(not(unix))]
 pub const fn sigpipe_was_ignored() -> bool {
     false
 }
+
+/// Debug function: query and log current SIGPIPE disposition
+#[cfg(unix)]
+pub fn debug_sigpipe_disposition(context: &str) {
+    use nix::libc;
+    use std::mem::MaybeUninit;
+    use std::ptr;
+
+    let mut current = MaybeUninit::<libc::sigaction>::uninit();
+    if unsafe { libc::sigaction(libc::SIGPIPE, ptr::null(), current.as_mut_ptr()) } == 0 {
+        let action = unsafe { current.assume_init() };
+        let disposition = if action.sa_sigaction == libc::SIG_IGN {
+            "SIG_IGN (ignored)"
+        } else if action.sa_sigaction == libc::SIG_DFL {
+            "SIG_DFL (default - will terminate on SIGPIPE)"
+        } else {
+            "custom handler"
+        };
+        eprintln!(
+            "[SIGPIPE-DEBUG] {} - current SIGPIPE disposition: {}",
+            context, disposition
+        );
+    } else {
+        eprintln!(
+            "[SIGPIPE-DEBUG] {} - failed to query SIGPIPE disposition",
+            context
+        );
+    }
+}
+
+#[cfg(not(unix))]
+pub fn debug_sigpipe_disposition(_context: &str) {}
 
 #[cfg(target_os = "linux")]
 pub fn ensure_stdout_not_broken() -> std::io::Result<bool> {

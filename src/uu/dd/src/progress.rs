@@ -463,15 +463,31 @@ impl SignalHandler {
         use signal_hook::consts::signal::*;
         use signal_hook::iterator::Signals;
 
+        eprintln!("[DD-DEBUG] SignalHandler::install_signal_handler() - creating signal_hook pipe");
+        uucore::signals::debug_sigpipe_disposition("SignalHandler::install before Signals::new");
+
         let mut signals = Signals::new([SIGUSR1])?;
         let handle = signals.handle();
+
+        eprintln!(
+            "[DD-DEBUG] SignalHandler::install_signal_handler() - signal_hook pipe created successfully"
+        );
+        uucore::signals::debug_sigpipe_disposition("SignalHandler::install after Signals::new");
+
         let thread = std::thread::spawn(move || {
+            let tid = std::thread::current().id();
+            eprintln!("[DD-DEBUG] [{tid:?}] SignalHandler signal thread STARTED");
+            let _ = std::io::stderr().flush();
+
             for signal in &mut signals {
                 match signal {
                     SIGUSR1 => (*f)(),
                     _ => unreachable!(),
                 }
             }
+
+            eprintln!("[DD-DEBUG] [{tid:?}] SignalHandler signal thread EXITING (iterator finished)");
+            let _ = std::io::stderr().flush();
         });
 
         Ok(Self {
@@ -484,10 +500,40 @@ impl SignalHandler {
 #[cfg(target_os = "linux")]
 impl Drop for SignalHandler {
     fn drop(&mut self) {
+        let tid = std::thread::current().id();
+
+        eprintln!("[DD-DEBUG] [{tid:?}] SignalHandler::drop() - ENTERING drop");
+        let _ = std::io::stderr().flush();
+
+        uucore::signals::debug_sigpipe_disposition("SignalHandler::drop ENTRY");
+
+        eprintln!("[DD-DEBUG] [{tid:?}] SignalHandler::drop() - about to call handle.close()");
+        let _ = std::io::stderr().flush();
+
+        // This is where we suspect SIGPIPE might occur
         self.handle.close();
+
+        // If we get here, handle.close() didn't kill us
+        eprintln!("[DD-DEBUG] [{tid:?}] SignalHandler::drop() - handle.close() returned successfully");
+        let _ = std::io::stderr().flush();
+
+        uucore::signals::debug_sigpipe_disposition("SignalHandler::drop after handle.close");
+
+        eprintln!("[DD-DEBUG] [{tid:?}] SignalHandler::drop() - about to join thread");
+        let _ = std::io::stderr().flush();
+
         if let Some(thread) = std::mem::take(&mut self.thread) {
+            eprintln!("[DD-DEBUG] [{tid:?}] SignalHandler::drop() - calling thread.join()");
+            let _ = std::io::stderr().flush();
+
             thread.join().unwrap();
+
+            eprintln!("[DD-DEBUG] [{tid:?}] SignalHandler::drop() - thread.join() completed");
+            let _ = std::io::stderr().flush();
         }
+
+        eprintln!("[DD-DEBUG] [{tid:?}] SignalHandler::drop() - EXITING drop successfully");
+        let _ = std::io::stderr().flush();
     }
 }
 

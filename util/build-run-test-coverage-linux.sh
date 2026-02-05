@@ -81,7 +81,7 @@ run_test_and_aggregate() {
         --color=always \
         2>&1 \
         ${2} \
-    | grep -v 'SKIP'
+    | grep -a -v 'SKIP'
     # Note: Do not print the skipped tests on the output as there will be many.
 
     echo "## Tests for (${1}) generated $(du -h -d1 ${PROFRAW_DIR} | cut -f 1) of profraw files"
