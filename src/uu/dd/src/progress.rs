@@ -485,11 +485,27 @@ impl SignalHandler {
 #[cfg(target_os = "linux")]
 impl Drop for SignalHandler {
     fn drop(&mut self) {
+        // Block SIGPIPE during cleanup to prevent the process from being killed
+        // when signal_hook's internal pipe is closed. The handle.close() call
+        // writes to the pipe to wake up readers, which can trigger SIGPIPE if
+        // SIGPIPE is set to SIG_DFL and the read end is in a certain state.
+        use nix::sys::signal::{SigSet, SigmaskHow, sigprocmask};
+
+        let mut oldset = SigSet::empty();
+        let mut sigpipe_set = SigSet::empty();
+        sigpipe_set.add(nix::sys::signal::SIGPIPE);
+
+        // Block SIGPIPE
+        let _ = sigprocmask(SigmaskHow::SIG_BLOCK, Some(&sigpipe_set), Some(&mut oldset));
+
         self.handle.close();
 
         if let Some(thread) = std::mem::take(&mut self.thread) {
             thread.join().unwrap();
         }
+
+        // Restore original signal mask
+        let _ = sigprocmask(SigmaskHow::SIG_SETMASK, Some(&oldset), None);
     }
 }
 
