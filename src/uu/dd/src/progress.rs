@@ -477,7 +477,6 @@ impl SignalHandler {
         let thread = std::thread::spawn(move || {
             let tid = std::thread::current().id();
             eprintln!("[DD-DEBUG] [{tid:?}] SignalHandler signal thread STARTED");
-            let _ = std::io::stderr().flush();
 
             for signal in &mut signals {
                 match signal {
@@ -487,7 +486,6 @@ impl SignalHandler {
             }
 
             eprintln!("[DD-DEBUG] [{tid:?}] SignalHandler signal thread EXITING (iterator finished)");
-            let _ = std::io::stderr().flush();
         });
 
         Ok(Self {
@@ -503,37 +501,26 @@ impl Drop for SignalHandler {
         let tid = std::thread::current().id();
 
         eprintln!("[DD-DEBUG] [{tid:?}] SignalHandler::drop() - ENTERING drop");
-        let _ = std::io::stderr().flush();
-
         uucore::signals::debug_sigpipe_disposition("SignalHandler::drop ENTRY");
 
         eprintln!("[DD-DEBUG] [{tid:?}] SignalHandler::drop() - about to call handle.close()");
-        let _ = std::io::stderr().flush();
 
         // This is where we suspect SIGPIPE might occur
         self.handle.close();
 
         // If we get here, handle.close() didn't kill us
         eprintln!("[DD-DEBUG] [{tid:?}] SignalHandler::drop() - handle.close() returned successfully");
-        let _ = std::io::stderr().flush();
-
         uucore::signals::debug_sigpipe_disposition("SignalHandler::drop after handle.close");
 
         eprintln!("[DD-DEBUG] [{tid:?}] SignalHandler::drop() - about to join thread");
-        let _ = std::io::stderr().flush();
 
         if let Some(thread) = std::mem::take(&mut self.thread) {
             eprintln!("[DD-DEBUG] [{tid:?}] SignalHandler::drop() - calling thread.join()");
-            let _ = std::io::stderr().flush();
-
             thread.join().unwrap();
-
             eprintln!("[DD-DEBUG] [{tid:?}] SignalHandler::drop() - thread.join() completed");
-            let _ = std::io::stderr().flush();
         }
 
         eprintln!("[DD-DEBUG] [{tid:?}] SignalHandler::drop() - EXITING drop successfully");
-        let _ = std::io::stderr().flush();
     }
 }
 
