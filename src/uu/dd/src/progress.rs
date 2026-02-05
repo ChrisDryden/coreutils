@@ -459,12 +459,13 @@ pub(crate) struct SignalHandler {
 fn debug_log(msg: &str) {
     use std::fs::OpenOptions;
     use std::io::Write;
+    let pid = std::process::id();
     if let Ok(mut f) = OpenOptions::new()
         .create(true)
         .append(true)
         .open("/tmp/dd_signal_debug.log")
     {
-        let _ = writeln!(f, "{}", msg);
+        let _ = writeln!(f, "[PID {}] {}", pid, msg);
     }
 }
 
