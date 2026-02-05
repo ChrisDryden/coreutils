@@ -185,6 +185,12 @@ jobs:
         FEATURES_OPTION: ${{ steps.vars.outputs.CARGO_FEATURES_OPTION }}
         # RUSTUP_TOOLCHAIN: ${{ steps.vars.outputs.TOOLCHAIN }}
 
+    - name: Print signal handler debug log
+      if: ${{ !cancelled() }}
+      run: |
+        echo "=== Signal handler debug log ==="
+        cat /tmp/dd_signal_debug.log 2>/dev/null || echo "No debug log found"
+
     - name: Upload coverage results (to Codecov.io)
       uses: codecov/codecov-action@v5
       with:

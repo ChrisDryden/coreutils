@@ -10,8 +10,6 @@
 //! [`gen_prog_updater`] function can be used to implement a progress
 //! updater that runs in its own thread.
 use std::io::Write;
-#[cfg(target_os = "linux")]
-use std::mem::ManuallyDrop;
 use std::sync::mpsc;
 #[cfg(target_os = "linux")]
 use std::thread::JoinHandle;
@@ -451,16 +449,23 @@ pub(crate) fn gen_prog_updater(
 }
 
 /// Signal handler that listens for SIGUSR1 signal and runs provided closure.
-///
-/// Uses `ManuallyDrop` for the handle to prevent SIGPIPE issues on cleanup.
-/// When the handle is dropped normally, it writes to signal_hook's internal pipe,
-/// which can trigger SIGPIPE if SIGPIPE is set to SIG_DFL.
 #[cfg(target_os = "linux")]
 pub(crate) struct SignalHandler {
-    #[allow(dead_code)] // Intentionally kept alive to prevent SIGPIPE on drop
-    handle: ManuallyDrop<Handle>,
-    #[allow(dead_code)]
+    handle: Handle,
     thread: Option<JoinHandle<()>>,
+}
+
+#[cfg(target_os = "linux")]
+fn debug_log(msg: &str) {
+    use std::fs::OpenOptions;
+    use std::io::Write;
+    if let Ok(mut f) = OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open("/tmp/dd_signal_debug.log")
+    {
+        let _ = writeln!(f, "{}", msg);
+    }
 }
 
 #[cfg(target_os = "linux")]
@@ -475,24 +480,47 @@ impl SignalHandler {
         let handle = signals.handle();
 
         let thread = std::thread::spawn(move || {
+            debug_log("Signal handler thread started");
             for signal in &mut signals {
+                debug_log(&format!("Signal handler thread received signal: {}", signal));
                 match signal {
                     SIGUSR1 => (*f)(),
                     _ => unreachable!(),
                 }
             }
+            debug_log("Signal handler thread exiting (iterator returned None)");
         });
 
         Ok(Self {
-            handle: ManuallyDrop::new(handle),
+            handle,
             thread: Some(thread),
         })
     }
 }
 
-// No Drop implementation needed - ManuallyDrop prevents the handle from being
-// dropped, which avoids the SIGPIPE issue. The thread and other resources will
-// be cleaned up when the process exits.
+#[cfg(target_os = "linux")]
+impl Drop for SignalHandler {
+    fn drop(&mut self) {
+        debug_log("SignalHandler::drop() called");
+
+        // Check if thread is still running
+        if let Some(ref thread) = self.thread {
+            debug_log(&format!("Thread is_finished: {}", thread.is_finished()));
+        }
+
+        debug_log("About to call handle.close()");
+        self.handle.close();
+        debug_log("handle.close() completed");
+
+        if let Some(thread) = self.thread.take() {
+            debug_log("About to join thread");
+            let _ = thread.join();
+            debug_log("Thread joined");
+        }
+
+        debug_log("SignalHandler::drop() completed");
+    }
+}
 
 /// Return a closure that can be used in its own thread to print progress info.
 ///
