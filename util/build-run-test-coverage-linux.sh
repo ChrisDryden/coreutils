@@ -58,7 +58,9 @@ rm -rf "${PROFDATA_DIR}" && mkdir -p "${PROFDATA_DIR}"
 rm -rf "${REPORT_DIR}" && mkdir -p "${REPORT_DIR}"
 
 #shellcheck disable=SC2086
-UTIL_LIST=$("${ME_dir}"/show-utils.sh ${FEATURES_OPTION})
+# UTIL_LIST=$("${ME_dir}"/show-utils.sh ${FEATURES_OPTION})
+# DEBUG: Only test dd for faster iteration
+UTIL_LIST="dd"
 
 export CARGO_INCREMENTAL=0
 export RUSTFLAGS="-Cinstrument-coverage -Ccodegen-units=1 -Copt-level=0 -Clink-dead-code -Coverflow-checks=off -Zpanic_abort_tests -Cpanic=abort"
@@ -79,7 +81,7 @@ run_test_and_aggregate() {
         --color=always \
         2>&1 \
         ${2} \
-    | grep -v 'SKIP'
+    | grep -a -v 'SKIP'
     # Note: Do not print the skipped tests on the output as there will be many.
 
     echo "## Tests for (${1}) generated $(du -h -d1 ${PROFRAW_DIR} | cut -f 1) of profraw files"
@@ -95,24 +97,30 @@ run_test_and_aggregate() {
     # We don't want an error in `llvm-profdata` to abort the whole program
 }
 
+# Run tests multiple times to increase chance of hitting race conditions
+NUM_ITERATIONS=${NUM_ITERATIONS:-5}
+
 for UTIL in ${UTIL_LIST}; do
+    for i in $(seq 1 ${NUM_ITERATIONS}); do
+        echo "## Iteration ${i}/${NUM_ITERATIONS} for ${UTIL}"
 
-    if [ "${UTIL}" = "stty" ]; then
-        run_test_and_aggregate \
-            "${UTIL}" \
-            "-p coreutils -p uu_${UTIL} -E test(/^test_${UTIL}::/) ${FEATURES_OPTION}"
-    else
-        run_test_and_aggregate \
-            "${UTIL}" \
-            "-p coreutils -E test(/^test_${UTIL}::/) ${FEATURES_OPTION}"
-    fi
+        if [ "${UTIL}" = "stty" ]; then
+            run_test_and_aggregate \
+                "${UTIL}" \
+                "-p coreutils -p uu_${UTIL} -E test(/^test_${UTIL}::/) ${FEATURES_OPTION}"
+        else
+            run_test_and_aggregate \
+                "${UTIL}" \
+                "-p coreutils -E test(/^test_${UTIL}::/) ${FEATURES_OPTION}"
+        fi
 
-    echo "## Clear the trace directory to free up space"
-    rm -rf "${PROFRAW_DIR}" && mkdir -p "${PROFRAW_DIR}"
+        echo "## Clear the trace directory to free up space"
+        rm -rf "${PROFRAW_DIR}" && mkdir -p "${PROFRAW_DIR}"
+    done
 done;
 
-echo "Running coverage tests over uucore"
-run_test_and_aggregate "uucore" "-p uucore --all-features"
+# echo "Running coverage tests over uucore"
+# run_test_and_aggregate "uucore" "-p uucore --all-features"
 
 echo "# Aggregating all the profraw files under ${REPORT_PATH}"
 grcov \

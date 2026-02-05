@@ -1315,6 +1315,7 @@ fn finalize<T>(
     let wstat = wstat + wstat_update;
     let prog_update = ProgUpdate::new(rstat, wstat, start.elapsed(), ProgUpdateType::Final);
     prog_tx.send(prog_update).unwrap_or(());
+
     // Wait for the output thread to finish
     output_thread
         .join()

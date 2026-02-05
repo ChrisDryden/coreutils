@@ -450,12 +450,35 @@ impl CmdResult {
     /// asserts that the command resulted in a success (zero) status code
     #[track_caller]
     pub fn success(&self) -> &Self {
+        #[cfg(unix)]
+        let signal_info = self
+            .exit_status
+            .and_then(|e| {
+                use std::os::unix::process::ExitStatusExt;
+                e.signal().map(|sig| {
+                    let signal_name = match sig {
+                        13 => "SIGPIPE",
+                        2 => "SIGINT",
+                        15 => "SIGTERM",
+                        9 => "SIGKILL",
+                        11 => "SIGSEGV",
+                        _ => "UNKNOWN",
+                    };
+                    format!(" (killed by signal {} - {})", sig, signal_name)
+                })
+            })
+            .unwrap_or_default();
+
+        #[cfg(not(unix))]
+        let signal_info = String::new();
+
         assert!(
             self.succeeded(),
-            "Command was expected to succeed. code: {}\nstdout = {}\n stderr = {}",
-            self.code(),
-            self.stdout_str(),
-            self.stderr_str()
+            "Command was expected to succeed. code: {:?}{}\nstdout = {}\n stderr = {}",
+            self.exit_status.and_then(|e| e.code()),
+            signal_info,
+            String::from_utf8_lossy(&self.stdout),
+            String::from_utf8_lossy(&self.stderr)
         );
         self
     }
@@ -466,8 +489,8 @@ impl CmdResult {
         assert!(
             !self.succeeded(),
             "Command was expected to fail.\nstdout = {}\n stderr = {}",
-            self.stdout_str(),
-            self.stderr_str()
+            String::from_utf8_lossy(&self.stdout),
+            String::from_utf8_lossy(&self.stderr)
         );
         self
     }
@@ -2492,18 +2515,41 @@ impl UChild {
     /// If `self.timeout` is reached while waiting or [`Child::wait_with_output`] returned an
     /// error.
     fn wait_with_output(mut self) -> io::Result<Output> {
+        use std::time::Instant;
+        let start = Instant::now();
+
         // some apps do not stop execution until their stdin gets closed.
         // to prevent a endless waiting here, we close the stdin.
+        eprintln!("[TIMING] wait_with_output: starting at {:?}", start);
         self.join(); // ensure that all pending async input is piped in
+        eprintln!("[TIMING] after join: {:?}", start.elapsed());
         self.close_stdin();
+        eprintln!("[TIMING] after close_stdin: {:?}", start.elapsed());
+
+        // If we have custom captured output, we must use wait() instead of wait_with_output()
+        // to avoid a race condition where wait_with_output()'s internal reader threads
+        // close the pipes while the child process is still writing to them, causing SIGPIPE.
+        // The custom CapturedOutput threads will handle reading the output.
+        let has_custom_capture = self.captured_stdout.is_some() || self.captured_stderr.is_some();
 
         let output = if let Some(timeout) = self.timeout {
-            let child = self.raw;
+            let mut child = self.raw;
 
             let (sender, receiver) = mpsc::channel();
             let handle = thread::Builder::new()
                 .name("wait_with_output".to_string())
-                .spawn(move || sender.send(child.wait_with_output()))
+                .spawn(move || {
+                    if has_custom_capture {
+                        // Use wait() to avoid internal reader threads that would race with our custom captures
+                        sender.send(child.wait().map(|status| Output {
+                            status,
+                            stdout: Vec::new(),
+                            stderr: Vec::new(),
+                        }))
+                    } else {
+                        sender.send(child.wait_with_output())
+                    }
+                })
                 .unwrap();
 
             match receiver.recv_timeout(timeout) {
@@ -2523,10 +2569,30 @@ impl UChild {
                 }
             }
         } else {
-            self.raw.wait_with_output()
+            eprintln!(
+                "[TIMING] calling wait/wait_with_output: {:?}",
+                start.elapsed()
+            );
+            if has_custom_capture {
+                // Use wait() to avoid internal reader threads that would race with our custom captures
+                self.raw.wait().map(|status| Output {
+                    status,
+                    stdout: Vec::new(),
+                    stderr: Vec::new(),
+                })
+            } else {
+                self.raw.wait_with_output()
+            }
         };
 
+        eprintln!("[TIMING] after wait_with_output: {:?}", start.elapsed());
         let mut output = output?;
+        eprintln!(
+            "[TIMING] output status: {:?}, stdout len: {}, stderr len: {}",
+            output.status,
+            output.stdout.len(),
+            output.stderr.len()
+        );
 
         if let Some(join_handle) = self.join_handle.take() {
             join_handle
@@ -2535,19 +2601,30 @@ impl UChild {
                 .unwrap();
         };
 
+        eprintln!(
+            "[TIMING] before joining stdout reader: {:?}",
+            start.elapsed()
+        );
         if let Some(stdout) = self.captured_stdout.as_mut() {
             if let Some(handle) = stdout.reader_thread_handle.take() {
                 handle.join().unwrap();
             }
             output.stdout = stdout.output_bytes();
+            eprintln!("[TIMING] captured stdout: {} bytes", output.stdout.len());
         }
+        eprintln!(
+            "[TIMING] before joining stderr reader: {:?}",
+            start.elapsed()
+        );
         if let Some(stderr) = self.captured_stderr.as_mut() {
             if let Some(handle) = stderr.reader_thread_handle.take() {
                 handle.join().unwrap();
             }
             output.stderr = stderr.output_bytes();
+            eprintln!("[TIMING] captured stderr: {} bytes", output.stderr.len());
         }
 
+        eprintln!("[TIMING] total elapsed: {:?}", start.elapsed());
         Ok(output)
     }
 

@@ -465,6 +465,7 @@ impl SignalHandler {
 
         let mut signals = Signals::new([SIGUSR1])?;
         let handle = signals.handle();
+
         let thread = std::thread::spawn(move || {
             for signal in &mut signals {
                 match signal {
@@ -484,9 +485,23 @@ impl SignalHandler {
 #[cfg(target_os = "linux")]
 impl Drop for SignalHandler {
     fn drop(&mut self) {
+        // Temporarily ignore SIGPIPE during cleanup to prevent the process from
+        // being killed when signal_hook's internal pipe is closed. Unlike blocking,
+        // ignoring discards the signal entirely rather than queuing it.
+        use nix::sys::signal::{SigHandler, Signal, signal};
+
+        // Save old handler and set to ignore
+        let old_handler = unsafe { signal(Signal::SIGPIPE, SigHandler::SigIgn) };
+
         self.handle.close();
+
         if let Some(thread) = std::mem::take(&mut self.thread) {
             thread.join().unwrap();
+        }
+
+        // Restore old handler
+        if let Ok(handler) = old_handler {
+            let _ = unsafe { signal(Signal::SIGPIPE, handler) };
         }
     }
 }
