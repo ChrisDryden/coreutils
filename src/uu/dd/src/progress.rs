@@ -10,6 +10,8 @@
 //! [`gen_prog_updater`] function can be used to implement a progress
 //! updater that runs in its own thread.
 use std::io::Write;
+#[cfg(target_os = "linux")]
+use std::mem::ManuallyDrop;
 use std::sync::mpsc;
 #[cfg(target_os = "linux")]
 use std::thread::JoinHandle;
@@ -448,10 +450,16 @@ pub(crate) fn gen_prog_updater(
     }
 }
 
-/// signal handler listens for SIGUSR1 signal and runs provided closure.
+/// Signal handler that listens for SIGUSR1 signal and runs provided closure.
+///
+/// Uses `ManuallyDrop` for the handle to prevent SIGPIPE issues on cleanup.
+/// When the handle is dropped normally, it writes to signal_hook's internal pipe,
+/// which can trigger SIGPIPE if SIGPIPE is set to SIG_DFL.
 #[cfg(target_os = "linux")]
 pub(crate) struct SignalHandler {
-    handle: Handle,
+    #[allow(dead_code)] // Intentionally kept alive to prevent SIGPIPE on drop
+    handle: ManuallyDrop<Handle>,
+    #[allow(dead_code)]
     thread: Option<JoinHandle<()>>,
 }
 
@@ -476,35 +484,15 @@ impl SignalHandler {
         });
 
         Ok(Self {
-            handle,
+            handle: ManuallyDrop::new(handle),
             thread: Some(thread),
         })
     }
 }
 
-#[cfg(target_os = "linux")]
-impl Drop for SignalHandler {
-    fn drop(&mut self) {
-        // Temporarily ignore SIGPIPE during cleanup to prevent the process from
-        // being killed when signal_hook's internal pipe is closed. Unlike blocking,
-        // ignoring discards the signal entirely rather than queuing it.
-        use nix::sys::signal::{SigHandler, Signal, signal};
-
-        // Save old handler and set to ignore
-        let old_handler = unsafe { signal(Signal::SIGPIPE, SigHandler::SigIgn) };
-
-        self.handle.close();
-
-        if let Some(thread) = std::mem::take(&mut self.thread) {
-            thread.join().unwrap();
-        }
-
-        // Restore old handler
-        if let Ok(handler) = old_handler {
-            let _ = unsafe { signal(Signal::SIGPIPE, handler) };
-        }
-    }
-}
+// No Drop implementation needed - ManuallyDrop prevents the handle from being
+// dropped, which avoids the SIGPIPE issue. The thread and other resources will
+// be cleaned up when the process exits.
 
 /// Return a closure that can be used in its own thread to print progress info.
 ///
