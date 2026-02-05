@@ -97,20 +97,26 @@ run_test_and_aggregate() {
     # We don't want an error in `llvm-profdata` to abort the whole program
 }
 
+# Run tests multiple times to increase chance of hitting race conditions
+NUM_ITERATIONS=${NUM_ITERATIONS:-5}
+
 for UTIL in ${UTIL_LIST}; do
+    for i in $(seq 1 ${NUM_ITERATIONS}); do
+        echo "## Iteration ${i}/${NUM_ITERATIONS} for ${UTIL}"
 
-    if [ "${UTIL}" = "stty" ]; then
-        run_test_and_aggregate \
-            "${UTIL}" \
-            "-p coreutils -p uu_${UTIL} -E test(/^test_${UTIL}::/) ${FEATURES_OPTION}"
-    else
-        run_test_and_aggregate \
-            "${UTIL}" \
-            "-p coreutils -E test(/^test_${UTIL}::/) ${FEATURES_OPTION}"
-    fi
+        if [ "${UTIL}" = "stty" ]; then
+            run_test_and_aggregate \
+                "${UTIL}" \
+                "-p coreutils -p uu_${UTIL} -E test(/^test_${UTIL}::/) ${FEATURES_OPTION}"
+        else
+            run_test_and_aggregate \
+                "${UTIL}" \
+                "-p coreutils -E test(/^test_${UTIL}::/) ${FEATURES_OPTION}"
+        fi
 
-    echo "## Clear the trace directory to free up space"
-    rm -rf "${PROFRAW_DIR}" && mkdir -p "${PROFRAW_DIR}"
+        echo "## Clear the trace directory to free up space"
+        rm -rf "${PROFRAW_DIR}" && mkdir -p "${PROFRAW_DIR}"
+    done
 done;
 
 # echo "Running coverage tests over uucore"

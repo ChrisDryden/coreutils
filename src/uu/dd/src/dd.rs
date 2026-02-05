@@ -1116,10 +1116,6 @@ fn flush_caches_full_length(i: &Input, o: &Output) -> io::Result<()> {
 /// If there is a problem reading from the input or writing to
 /// this output.
 fn dd_copy(mut i: Input, o: Output) -> io::Result<()> {
-    eprintln!("[DD-DEBUG] dd_copy() starting");
-    #[cfg(unix)]
-    uucore::signals::debug_sigpipe_disposition("dd_copy start");
-
     // The read and write statistics.
     //
     // These objects are counters, initialized to zero. After each
@@ -1192,17 +1188,13 @@ fn dd_copy(mut i: Input, o: Output) -> io::Result<()> {
     // The signal handler spawns an own thread that waits for signals.
     // When the signal is received, it calls a handler function.
     // We inject a handler function that manually triggers the alarm.
-    eprintln!("[DD-DEBUG] About to create SignalHandler");
     #[cfg(target_os = "linux")]
     let signal_handler = progress::SignalHandler::install_signal_handler(alarm.manual_trigger_fn());
     #[cfg(target_os = "linux")]
     if let Err(e) = &signal_handler {
-        eprintln!("[DD-DEBUG] SignalHandler creation failed: {e}");
         if Some(StatusLevel::None) != i.settings.status {
             eprintln!("{}\n\t{e}", translate!("dd-warning-signal-handler"));
         }
-    } else {
-        eprintln!("[DD-DEBUG] SignalHandler created successfully");
     }
 
     // Index in the input file where we are reading bytes and in
@@ -1294,10 +1286,6 @@ fn dd_copy(mut i: Input, o: Output) -> io::Result<()> {
         }
     }
 
-    eprintln!("[DD-DEBUG] Main loop complete, about to call finalize()");
-    #[cfg(unix)]
-    uucore::signals::debug_sigpipe_disposition("dd_copy before finalize");
-
     finalize(o, rstat, wstat, start, &prog_tx, output_thread, truncate)
 }
 
@@ -1311,40 +1299,27 @@ fn finalize<T>(
     output_thread: thread::JoinHandle<T>,
     truncate: bool,
 ) -> io::Result<()> {
-    eprintln!("[DD-DEBUG] finalize() starting");
-
     // Flush the output in case a partial write has been buffered but
     // not yet written.
-    eprintln!("[DD-DEBUG] finalize() - flushing output");
     let wstat_update = output.flush()?;
 
     // Sync the output, if configured to do so.
-    eprintln!("[DD-DEBUG] finalize() - syncing output");
     output.sync()?;
 
     // Truncate the file to the final cursor location.
     if truncate {
-        eprintln!("[DD-DEBUG] finalize() - truncating");
         output.truncate();
     }
 
     // Print the final read/write statistics.
-    eprintln!("[DD-DEBUG] finalize() - sending final stats to progress thread");
     let wstat = wstat + wstat_update;
     let prog_update = ProgUpdate::new(rstat, wstat, start.elapsed(), ProgUpdateType::Final);
     prog_tx.send(prog_update).unwrap_or(());
 
     // Wait for the output thread to finish
-    eprintln!("[DD-DEBUG] finalize() - joining output thread");
     output_thread
         .join()
         .expect("Failed to join with the output thread.");
-
-    eprintln!(
-        "[DD-DEBUG] finalize() - complete, about to return (SignalHandler will be dropped after this)"
-    );
-    #[cfg(unix)]
-    uucore::signals::debug_sigpipe_disposition("finalize before return");
 
     Ok(())
 }
@@ -1541,41 +1516,25 @@ fn is_fifo(filename: &str) -> bool {
 
 #[uucore::main]
 pub fn uumain(args: impl uucore::Args) -> UResult<()> {
-    eprintln!("[DD-DEBUG] uumain() starting");
-    #[cfg(unix)]
-    uucore::signals::debug_sigpipe_disposition("uumain start");
-
-    eprintln!("[DD-DEBUG] uumain() - about to parse clap args");
     let matches = uucore::clap_localization::handle_clap_result(uu_app(), args)?;
-    eprintln!("[DD-DEBUG] uumain() - clap args parsed successfully");
 
-    eprintln!("[DD-DEBUG] uumain() - about to parse settings");
     let settings: Settings = Parser::new().parse(
         matches
             .get_many::<String>(options::OPERANDS)
             .unwrap_or_default(),
     )?;
-    eprintln!("[DD-DEBUG] uumain() - settings parsed successfully");
 
     #[cfg(unix)]
     if uucore::signals::stderr_was_closed() && settings.status != Some(StatusLevel::None) {
         return Err(USimpleError::new(1, "write error"));
     }
 
-    eprintln!("[DD-DEBUG] uumain() - about to create Input");
-    #[cfg(unix)]
-    uucore::signals::debug_sigpipe_disposition("uumain before Input::new");
     let i = match settings.infile {
         #[cfg(unix)]
         Some(ref infile) if is_fifo(infile) => Input::new_fifo(Path::new(&infile), &settings)?,
         Some(ref infile) => Input::new_file(Path::new(&infile), &settings)?,
         None => Input::new_stdin(&settings)?,
     };
-    eprintln!("[DD-DEBUG] uumain() - Input created successfully");
-
-    eprintln!("[DD-DEBUG] uumain() - about to create Output");
-    #[cfg(unix)]
-    uucore::signals::debug_sigpipe_disposition("uumain before Output::new");
     let o = match settings.outfile {
         #[cfg(unix)]
         Some(ref outfile) if is_fifo(outfile) => Output::new_fifo(Path::new(&outfile), &settings)?,
@@ -1583,11 +1542,6 @@ pub fn uumain(args: impl uucore::Args) -> UResult<()> {
         None if is_stdout_redirected_to_seekable_file() => Output::new_file_from_stdout(&settings)?,
         None => Output::new_stdout(&settings)?,
     };
-    eprintln!("[DD-DEBUG] uumain() - Output created successfully");
-
-    eprintln!("[DD-DEBUG] uumain() - about to call dd_copy()");
-    #[cfg(unix)]
-    uucore::signals::debug_sigpipe_disposition("uumain before dd_copy");
     dd_copy(i, o).map_err_context(|| translate!("dd-error-io-error"))
 }
 
