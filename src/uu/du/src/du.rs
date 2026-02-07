@@ -963,38 +963,62 @@ fn read_files_from(file_name: &OsStr) -> Result<Vec<PathBuf>, std::io::Error> {
     Ok(paths)
 }
 
-fn get_block_size_arg_index_if_present(matches: &ArgMatches, flag: &str) -> Option<usize> {
-    if matches.get_flag(flag) {
-        // Indices of returns index even if flag is not present, thats why we need to if guard it
-        matches
-            .indices_of(flag)
-            .and_then(|mut indices| indices.next_back())
-    } else {
-        None
-    }
+fn parse_block_size_option(matches: &ArgMatches) -> UResult<Option<SizeFormat>> {
+    matches
+        .get_one::<String>(options::BLOCK_SIZE)
+        .map(|s| {
+            let bs = read_block_size(Some(s.as_ref()))?;
+            if bs == 0 {
+                return Err(std::io::Error::other(translate!(
+                    "du-error-invalid-block-size-argument",
+                    "option" => options::BLOCK_SIZE,
+                    "value" => s.quote()
+                ))
+                .into());
+            }
+            Ok(SizeFormat::BlockSize(bs))
+        })
+        .transpose()
 }
 
-fn handle_block_size_arg_override(matches: &ArgMatches) -> Option<SizeFormat> {
-    let candidates = [
-        (
-            SizeFormat::BlockSize(1),
-            get_block_size_arg_index_if_present(matches, options::BYTES),
-        ),
-        (
-            SizeFormat::BlockSize(1024),
-            get_block_size_arg_index_if_present(matches, options::BLOCK_SIZE_1K),
-        ),
-        (
-            SizeFormat::BlockSize(1024 * 1024),
-            get_block_size_arg_index_if_present(matches, options::BLOCK_SIZE_1M),
-        ),
-    ];
+fn resolve_size_format(matches: &ArgMatches) -> UResult<SizeFormat> {
+    // indices_of can return indices for default values, so we must verify
+    // the arg was actually specified on the command line before using its index
+    let last_index = |arg| {
+        matches
+            .value_source(arg)
+            .is_some_and(|s| s == clap::parser::ValueSource::CommandLine)
+            .then(|| matches.indices_of(arg).and_then(|mut i| i.next_back()))
+            .flatten()
+    };
 
-    candidates
-        .into_iter()
-        .filter(|(_, idx)| idx.is_some())
-        .max_by_key(|&(_, idx)| idx.unwrap_or(0))
-        .map(|(size_format, _)| size_format)
+    [
+        (last_index(options::BYTES), Some(SizeFormat::BlockSize(1))),
+        (
+            last_index(options::BLOCK_SIZE_1K),
+            Some(SizeFormat::BlockSize(1024)),
+        ),
+        (
+            last_index(options::BLOCK_SIZE_1M),
+            Some(SizeFormat::BlockSize(1024 * 1024)),
+        ),
+        (
+            last_index(options::HUMAN_READABLE),
+            Some(SizeFormat::HumanBinary),
+        ),
+        (last_index(options::SI), Some(SizeFormat::HumanDecimal)),
+        (
+            last_index(options::BLOCK_SIZE),
+            parse_block_size_option(matches)?,
+        ),
+    ]
+    .into_iter()
+    .filter_map(|(idx, fmt)| Some((idx?, fmt?)))
+    .max_by_key(|&(i, _)| i)
+    .map_or_else(
+        || Ok(SizeFormat::BlockSize(read_block_size(None)?)),
+        |(_, fmt)| Ok(fmt),
+    )
 }
 
 #[uucore::main]
@@ -1048,21 +1072,7 @@ pub fn uumain(args: impl uucore::Args) -> UResult<()> {
             .map_or(MetadataTimeField::Modification, |s| s.as_str().into())
     });
 
-    let size_format = if matches.get_flag(options::HUMAN_READABLE) {
-        SizeFormat::HumanBinary
-    } else if matches.get_flag(options::SI) {
-        SizeFormat::HumanDecimal
-    } else if let Some(size_format) = handle_block_size_arg_override(&matches) {
-        size_format
-    } else {
-        let block_size_str = matches.get_one::<String>(options::BLOCK_SIZE);
-        let block_size = read_block_size(block_size_str.map(AsRef::as_ref))?;
-        if block_size == 0 {
-            return Err(std::io::Error::other(translate!("du-error-invalid-block-size-argument", "option" => options::BLOCK_SIZE, "value" => block_size_str.map_or("???BUG", |v| v).quote()))
-            .into());
-        }
-        SizeFormat::BlockSize(block_size)
-    };
+    let size_format = resolve_size_format(&matches)?;
 
     let traversal_options = TraversalOptions {
         all: matches.get_flag(options::ALL),

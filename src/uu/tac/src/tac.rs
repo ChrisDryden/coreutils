@@ -334,12 +334,18 @@ fn tac(filenames: &[OsString], before: bool, regex: bool, separator: &str) -> UR
                 set_exit_code(1);
                 continue;
             }
-            if let Some(mmap1) = try_mmap_stdin() {
+            // On Windows, mmap on stdin pipes returns 0 bytes (GetFileSize
+            // returns 0 for pipes), so skip it and always buffer through a
+            // temp file / Vec instead.
+            #[cfg(not(windows))]
+            let mmap_stdin = try_mmap_stdin();
+            #[cfg(windows)]
+            let mmap_stdin: Option<Mmap> = None;
+
+            if let Some(mmap1) = mmap_stdin {
                 mmap = mmap1;
                 &mmap
             } else {
-                // Copy stdin to a temp file (respects TMPDIR), then mmap it.
-                // Falls back to Vec buffer if temp file creation fails (e.g., bad TMPDIR).
                 match buffer_stdin() {
                     Ok(StdinData::Mmap(mmap1)) => {
                         mmap = mmap1;

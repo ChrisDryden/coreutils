@@ -2078,10 +2078,19 @@ fn test_block_size_args_override() {
         .set_len(100_000_000)
         .expect("cannot set file size");
 
-    let test_cases = [
-        (["-sk", "-m"], "-sm"),
-        (["-sk", "-b"], "-sb"),
-        (["-sm", "-k"], "-sk"),
+    let test_cases: Vec<(Vec<&str>, Vec<&str>)> = vec![
+        (vec!["-sk", "-m"], vec!["-sm"]),
+        (vec!["-sk", "-b"], vec!["-sb"]),
+        (vec!["-sm", "-k"], vec!["-sk"]),
+        (vec!["-sk", "--si"], vec!["-s", "--si"]),
+        (vec!["-sk", "-h"], vec!["-s", "-h"]),
+        (
+            vec!["-sm", "--block-size=128"],
+            vec!["-s", "--block-size=128"],
+        ),
+        (vec!["--block-size=128", "-b"], vec!["-b"]),
+        (vec!["--si", "-b"], vec!["-b"]),
+        (vec!["-h", "-b"], vec!["-b"]),
     ];
 
     for (idx, (overwriting_args, expected)) in test_cases.into_iter().enumerate() {
@@ -2095,13 +2104,13 @@ fn test_block_size_args_override() {
         let single_args = ts
             .ucmd()
             .arg(dir)
-            .arg(expected)
+            .args(&expected)
             .succeeds()
             .stdout_move_str();
 
         assert_eq!(
             overridden_args, single_args,
-            "The last argument of m, k and b should overwrite. Run: {idx}"
+            "The last size format argument should override. Run: {idx}"
         );
     }
 }
@@ -2125,9 +2134,15 @@ fn test_block_override_b_still_has_apparent_size() {
         .set_len(100_000_000)
         .expect("cannot set file size");
 
-    let test_cases = [
-        (["-sb", "-m"], ["-sm", "--apparent-size"]),
-        (["-sb", "-k"], ["-sk", "--apparent-size"]),
+    let test_cases: Vec<(Vec<&str>, Vec<&str>)> = vec![
+        (vec!["-b", "-m"], vec!["-m", "--apparent-size"]),
+        (vec!["-b", "-k"], vec!["-k", "--apparent-size"]),
+        (vec!["-b", "--si"], vec!["--si", "--apparent-size"]),
+        (vec!["-b", "-h"], vec!["-h", "--apparent-size"]),
+        (
+            vec!["-b", "--block-size=128"],
+            vec!["--block-size=128", "--apparent-size"],
+        ),
     ];
 
     for (idx, (overwriting_args, expected)) in test_cases.into_iter().enumerate() {
