@@ -21,7 +21,7 @@ use std::io::{BufRead, BufReader, BufWriter, ErrorKind, Read, Seek, SeekFrom, Wr
 use std::path::Path;
 use thiserror::Error;
 use uucore::display::Quotable;
-use uucore::error::{FromIo, UIoError, UResult, USimpleError, UUsageError};
+use uucore::error::{FromIo, UIoError, UResult, USimpleError, UUsageError, strip_errno};
 use uucore::translate;
 
 use uucore::parser::parse_size::parse_size_u64;
@@ -711,6 +711,9 @@ struct ByteChunkWriter<'a> {
     /// field.
     inner: BufWriter<Box<dyn Write>>,
 
+    /// Current output filename (for error reporting).
+    filename: String,
+
     /// Iterator that yields filenames for each chunk.
     filename_iterator: FilenameIterator<'a>,
 }
@@ -731,6 +734,7 @@ impl<'a> ByteChunkWriter<'a> {
             num_bytes_remaining_in_current_chunk: chunk_size,
             num_chunks_written: 0,
             inner,
+            filename,
             filename_iterator,
         })
     }
@@ -751,6 +755,7 @@ impl Write for ByteChunkWriter<'_> {
             }
 
             if self.num_bytes_remaining_in_current_chunk == 0 {
+                self.flush()?;
                 // Increment the chunk number, reset the number of bytes remaining, and instantiate the new underlying writer.
                 self.num_chunks_written += 1;
                 self.num_bytes_remaining_in_current_chunk = self.chunk_size;
@@ -763,6 +768,7 @@ impl Write for ByteChunkWriter<'_> {
                     println!("creating file {}", filename.quote());
                 }
                 self.inner = self.settings.instantiate_current_writer(&filename, true)?;
+                self.filename = filename;
             }
 
             // If the capacity of this chunk is greater than the number of
@@ -799,7 +805,9 @@ impl Write for ByteChunkWriter<'_> {
         }
     }
     fn flush(&mut self) -> io::Result<()> {
-        self.inner.flush()
+        self.inner
+            .flush()
+            .map_err(|e| io::Error::other(format!("{}: {}", self.filename, strip_errno(&e))))
     }
 }
 
@@ -835,6 +843,9 @@ struct LineChunkWriter<'a> {
     /// field.
     inner: BufWriter<Box<dyn Write>>,
 
+    /// Current output filename (for error reporting).
+    filename: String,
+
     /// Iterator that yields filenames for each chunk.
     filename_iterator: FilenameIterator<'a>,
 }
@@ -842,13 +853,15 @@ struct LineChunkWriter<'a> {
 impl<'a> LineChunkWriter<'a> {
     fn new(chunk_size: u64, settings: &'a Settings) -> UResult<Self> {
         let mut filename_iterator = FilenameIterator::new(&settings.prefix, &settings.suffix)?;
-        let inner = Self::start_new_chunk(settings, &mut filename_iterator)?;
+        let (inner, filename) =
+            Self::start_new_chunk(settings, &mut filename_iterator)?;
         Ok(LineChunkWriter {
             settings,
             chunk_size,
             num_lines_remaining_in_current_chunk: chunk_size,
             num_chunks_written: 0,
             inner,
+            filename,
             filename_iterator,
         })
     }
@@ -856,14 +869,15 @@ impl<'a> LineChunkWriter<'a> {
     fn start_new_chunk(
         settings: &Settings,
         filename_iterator: &mut FilenameIterator,
-    ) -> io::Result<BufWriter<Box<dyn Write>>> {
+    ) -> io::Result<(BufWriter<Box<dyn Write>>, String)> {
         let filename = filename_iterator.next().ok_or_else(|| {
             io::Error::other(translate!("split-error-output-file-suffixes-exhausted"))
         })?;
         if settings.verbose {
             println!("creating file {}", filename.quote());
         }
-        settings.instantiate_current_writer(&filename, true)
+        let writer = settings.instantiate_current_writer(&filename, true)?;
+        Ok((writer, filename))
     }
 }
 
@@ -883,8 +897,10 @@ impl Write for LineChunkWriter<'_> {
             // current chunk, then start a new chunk and its
             // corresponding writer.
             if self.num_lines_remaining_in_current_chunk == 0 {
+                self.flush()?;
                 self.num_chunks_written += 1;
-                self.inner = Self::start_new_chunk(self.settings, &mut self.filename_iterator)?;
+                (self.inner, self.filename) =
+                    Self::start_new_chunk(self.settings, &mut self.filename_iterator)?;
                 self.num_lines_remaining_in_current_chunk = self.chunk_size;
             }
 
@@ -903,7 +919,9 @@ impl Write for LineChunkWriter<'_> {
         // limit.
         if prev < buf.len() {
             if self.num_lines_remaining_in_current_chunk == 0 {
-                self.inner = Self::start_new_chunk(self.settings, &mut self.filename_iterator)?;
+                self.flush()?;
+                (self.inner, self.filename) =
+                    Self::start_new_chunk(self.settings, &mut self.filename_iterator)?;
                 self.num_lines_remaining_in_current_chunk = self.chunk_size;
             }
             let num_bytes_written =
@@ -914,7 +932,9 @@ impl Write for LineChunkWriter<'_> {
     }
 
     fn flush(&mut self) -> io::Result<()> {
-        self.inner.flush()
+        self.inner
+            .flush()
+            .map_err(|e| io::Error::other(format!("{}: {}", self.filename, strip_errno(&e))))
     }
 }
 
@@ -1478,6 +1498,7 @@ where
     // because we start with `remaining == 0`, indicating that a new
     // chunk should start.
     let mut writer: BufWriter<Box<dyn Write>> = BufWriter::new(Box::new(io::Cursor::new(vec![])));
+    let mut current_filename = String::new();
 
     let mut remaining = 0;
     for line in lines_with_sep(reader, settings.separator) {
@@ -1485,6 +1506,9 @@ where
         let mut line = &line[..];
         loop {
             if remaining == 0 {
+                writer.flush().map_err(|e| {
+                    USimpleError::new(1, format!("{current_filename}: {}", strip_errno(&e)))
+                })?;
                 let filename = filename_iterator.next().ok_or_else(|| {
                     USimpleError::new(1, translate!("split-error-output-file-suffixes-exhausted"))
                 })?;
@@ -1492,6 +1516,7 @@ where
                     println!("creating file {}", filename.quote());
                 }
                 writer = settings.instantiate_current_writer(&filename, true)?;
+                current_filename = filename;
                 remaining = chunk_size;
             }
 
@@ -1574,7 +1599,9 @@ fn split(settings: &Settings) -> UResult<()> {
         Strategy::Lines(chunk_size) => {
             let mut writer = LineChunkWriter::new(chunk_size, settings)?;
             match io::copy(&mut reader, &mut writer) {
-                Ok(_) => Ok(()),
+                Ok(_) => writer
+                    .flush()
+                    .map_err(|e| USimpleError::new(1, format!("{e}")).into()),
                 Err(e) => match e.kind() {
                     // TODO Since the writer object controls the creation of
                     // new files, we need to rely on the `io::Result`
@@ -1596,7 +1623,9 @@ fn split(settings: &Settings) -> UResult<()> {
         Strategy::Bytes(chunk_size) => {
             let mut writer = ByteChunkWriter::new(chunk_size, settings)?;
             match io::copy(&mut reader, &mut writer) {
-                Ok(_) => Ok(()),
+                Ok(_) => writer
+                    .flush()
+                    .map_err(|e| USimpleError::new(1, format!("{e}")).into()),
                 Err(e) => match e.kind() {
                     // TODO Since the writer object controls the creation of
                     // new files, we need to rely on the `io::Result`
