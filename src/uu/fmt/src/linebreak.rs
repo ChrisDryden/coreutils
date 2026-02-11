@@ -3,10 +3,9 @@
 // For the full copyright and license information, please view the LICENSE
 // file that was distributed with this source code.
 
-// spell-checker:ignore (ToDO) INFTY MULT accum breakwords linebreak linebreaking linebreaks linelen maxlength minlength nchars ostream overlen parasplit plass posn powf punct signum slen sstart tabwidth tlen underlen winfo wlen wordlen
+// spell-checker:ignore (ToDO) accum bcost breakwords lcost linebreak linebreaking linebreaks linelen maxlength minlength nchars ostream overlen parasplit plass posn punct slen sstart tabwidth tlen underlen wcost winfo wlen wordlen
 
 use std::io::{BufWriter, Stdout, Write};
-use std::{cmp, mem};
 
 use crate::FmtOptions;
 use crate::parasplit::{ParaWords, Paragraph, WordInfo};
@@ -204,261 +203,150 @@ fn break_knuth_plass<'a, T: Clone + Iterator<Item = &'a WordInfo<'a>>>(
     args.ostream.write_all(b"\n")
 }
 
-struct LineBreak<'a> {
-    prev: usize,
-    linebreak: Option<&'a WordInfo<'a>>,
-    break_before: bool,
-    demerits: i64,
-    prev_rat: f32,
-    length: usize,
-    fresh: bool,
+/// GNU-compatible cost functions: EQUIV(n) = n*n, SHORT_COST(n) = EQUIV(n*10)
+fn short_cost(d: i64) -> i64 {
+    (d * 10) * (d * 10)
 }
 
-#[allow(clippy::cognitive_complexity)]
+fn ragged_cost(d: i64) -> i64 {
+    short_cost(d) / 2
+}
+
+const LINE_COST: i64 = 70 * 70;
+const SENTENCE_BONUS: i64 = 50 * 50;
+const NOBREAK_COST: i64 = 600 * 600;
+
+/// Scan forward from `first_word`, extending a line that starts at `init_len`,
+/// and return `(cost, break_index, line_length)` for the best break point.
+fn best_break(
+    words: &[&WordInfo],
+    init_len: usize,
+    first_word: usize,
+    prev_punct: bool,
+    args: &BreakArgs,
+    best_cost: &[i64],
+    next_brk: &[usize],
+    line_len: &[usize],
+) -> (i64, usize, usize) {
+    let n = words.len();
+    let goal = args.opts.goal as i64;
+
+    let mut best = i64::MAX;
+    let mut best_j = first_word;
+    let mut best_ll = init_len;
+    let mut len = init_len;
+    let mut prev_punct = prev_punct;
+
+    let mut j = first_word;
+    loop {
+        let lcost = if j >= n {
+            0
+        } else {
+            let mut c = short_cost(goal - len as i64);
+            if next_brk[j] < n {
+                c += ragged_cost(len as i64 - line_len[j] as i64);
+            }
+            c
+        };
+
+        let wcost = lcost.saturating_add(best_cost[j]);
+        if wcost < best {
+            best = wcost;
+            best_j = j;
+            best_ll = len;
+        }
+
+        if j >= n {
+            break;
+        }
+
+        let slen = compute_slen(
+            args.uniform,
+            words[j].new_line,
+            words[j].sentence_start,
+            prev_punct,
+        );
+        let wlen = words[j].word_nchars + args.compute_width(words[j], len, false);
+        len += slen + wlen;
+        prev_punct = words[j].ends_punct;
+        j += 1;
+
+        if len > args.opts.width {
+            break;
+        }
+    }
+
+    (best, best_j, best_ll)
+}
+
+/// GNU-compatible backward dynamic programming for optimal line breaking.
+/// Uses the same cost functions as GNU fmt to produce identical output.
 fn find_kp_breakpoints<'a, T: Iterator<Item = &'a WordInfo<'a>>>(
     iter: T,
     args: &BreakArgs<'a>,
 ) -> Vec<(&'a WordInfo<'a>, bool)> {
-    let mut iter = iter.peekable();
-    // set up the initial null linebreak
-    let mut linebreaks = vec![LineBreak {
-        prev: 0,
-        linebreak: None,
-        break_before: false,
-        demerits: 0,
-        prev_rat: 0.0,
-        length: args.init_len,
-        fresh: false,
-    }];
-    // this vec holds the current active linebreaks; next_ holds the breaks that will be active for
-    // the next word
-    let mut active_breaks = vec![0];
-    let mut next_active_breaks = vec![];
-
-    let stretch = args.opts.width - args.opts.goal;
-    let minlength = if args.opts.goal <= 10 {
-        1
-    } else {
-        args.opts.goal.max(stretch + 1) - stretch
-    };
-    let mut new_linebreaks = vec![];
-    let mut is_sentence_start = false;
-    let mut least_demerits = 0;
-    while let Some(w) = iter.next() {
-        // if this is the last word, we don't add additional demerits for this break
-        let (is_last_word, is_sentence_end) = match iter.peek() {
-            None => (true, true),
-            Some(&&WordInfo {
-                sentence_start: st,
-                new_line: nl,
-                ..
-            }) => (false, st || (nl && w.ends_punct)),
-        };
-
-        // should we be adding extra space at the beginning of the next sentence?
-        let slen = compute_slen(args.uniform, w.new_line, is_sentence_start, false);
-
-        let mut ld_new = i64::MAX;
-        let mut ld_next = i64::MAX;
-        let mut ld_idx = 0;
-        new_linebreaks.clear();
-        next_active_breaks.clear();
-        // go through each active break, extending it and possibly adding a new active
-        // break if we are above the minimum required length
-        #[allow(clippy::explicit_iter_loop)]
-        for &i in active_breaks.iter() {
-            let active = &mut linebreaks[i];
-            // normalize demerits to avoid overflow, and record if this is the least
-            active.demerits -= least_demerits;
-            if active.demerits < ld_next {
-                ld_next = active.demerits;
-                ld_idx = i;
-            }
-
-            // get the new length
-            let tlen = w.word_nchars
-                + args.compute_width(w, active.length, active.fresh)
-                + slen
-                + active.length;
-
-            // if tlen is longer than args.opts.width, we drop this break from the active list
-            // otherwise, we extend the break, and possibly add a new break at this point
-            if tlen <= args.opts.width {
-                // this break will still be active next time
-                next_active_breaks.push(i);
-                // we can put this word on this line
-                active.fresh = false;
-                active.length = tlen;
-
-                // if we're above the minlength, we can also consider breaking here
-                if tlen >= minlength {
-                    let (new_demerits, new_ratio) = if is_last_word {
-                        // there is no penalty for the final line's length
-                        (0, 0.0)
-                    } else {
-                        compute_demerits(
-                            args.opts.goal as isize - tlen as isize,
-                            stretch,
-                            w.word_nchars,
-                            active.prev_rat,
-                        )
-                    };
-
-                    // do not even consider adding a line that has too many demerits
-                    // also, try to detect overflow by checking signum
-                    let total_demerits = new_demerits + active.demerits;
-                    if new_demerits < BAD_INFTY_SQ
-                        && total_demerits < ld_new
-                        && active.demerits.signum() <= new_demerits.signum()
-                    {
-                        ld_new = total_demerits;
-                        new_linebreaks.push(LineBreak {
-                            prev: i,
-                            linebreak: Some(w),
-                            break_before: false,
-                            demerits: total_demerits,
-                            prev_rat: new_ratio,
-                            length: args.indent_len,
-                            fresh: true,
-                        });
-                    }
-                }
-            }
-        }
-
-        // if we generated any new linebreaks, add the last one to the list
-        // the last one is always the best because we don't add to new_linebreaks unless
-        // it's better than the best one so far
-        match new_linebreaks.pop() {
-            None => (),
-            Some(lb) => {
-                next_active_breaks.push(linebreaks.len());
-                linebreaks.push(lb);
-            }
-        }
-
-        if next_active_breaks.is_empty() {
-            // every potential linebreak is too long! choose the linebreak with the least demerits, ld_idx
-            let new_break =
-                restart_active_breaks(args, &linebreaks[ld_idx], ld_idx, w, slen, minlength);
-            next_active_breaks.push(linebreaks.len());
-            linebreaks.push(new_break);
-            least_demerits = 0;
-        } else {
-            // next time around, normalize out the demerits fields
-            // on active linebreaks to make overflow less likely
-            least_demerits = cmp::max(ld_next, 0);
-        }
-        // swap in new list of active breaks
-        mem::swap(&mut active_breaks, &mut next_active_breaks);
-        // If this was the last word in a sentence, the next one must be the first in the next.
-        is_sentence_start = is_sentence_end;
+    let words: Vec<&WordInfo> = iter.collect();
+    let n = words.len();
+    if n == 0 {
+        return vec![];
     }
 
-    // return the best path
-    build_best_path(&linebreaks, &active_breaks)
-}
+    let is_final = |i: usize| -> bool {
+        i == n - 1 || words[i + 1].sentence_start || (words[i + 1].new_line && words[i].ends_punct)
+    };
 
-fn build_best_path<'a>(paths: &[LineBreak<'a>], active: &[usize]) -> Vec<(&'a WordInfo<'a>, bool)> {
-    // of the active paths, we select the one with the fewest demerits
-    active
-        .iter()
-        .min_by_key(|&&a| paths[a].demerits)
-        .map(|&(mut best_idx)| {
-            let mut breakwords = vec![];
-            // now, chase the pointers back through the break list, recording
-            // the words at which we should break
-            loop {
-                let next_best = &paths[best_idx];
-                match next_best.linebreak {
-                    None => return breakwords,
-                    Some(prev) => {
-                        breakwords.push((prev, next_best.break_before));
-                        best_idx = next_best.prev;
-                    }
-                }
+    let mut best_cost = vec![0i64; n + 1];
+    let mut next_brk = vec![n; n];
+    let mut line_len = vec![0usize; n];
+
+    for start in (0..n).rev() {
+        let (best, brk, ll) = best_break(
+            &words,
+            args.indent_len + words[start].word_nchars,
+            start + 1,
+            words[start].ends_punct,
+            args,
+            &best_cost,
+            &next_brk,
+            &line_len,
+        );
+        next_brk[start] = brk;
+        line_len[start] = ll;
+
+        let mut bcost = LINE_COST;
+        if start > 0 && words[start - 1].ends_punct {
+            if is_final(start - 1) {
+                bcost -= SENTENCE_BONUS;
+            } else {
+                bcost += NOBREAK_COST;
             }
-        })
-        .unwrap_or_default()
-}
-
-// "infinite" badness is more like (1+BAD_INFTY)^2 because of how demerits are computed
-const BAD_INFTY: i64 = 10_000_000;
-const BAD_INFTY_SQ: i64 = BAD_INFTY * BAD_INFTY;
-// badness = BAD_MULT * abs(r) ^ 3
-const BAD_MULT: f32 = 200.0;
-// DR_MULT is multiplier for delta-R between lines
-const DR_MULT: f32 = 600.0;
-// DL_MULT is penalty multiplier for short words at end of line
-const DL_MULT: f32 = 10.0;
-
-fn compute_demerits(delta_len: isize, stretch: usize, wlen: usize, prev_rat: f32) -> (i64, f32) {
-    // how much stretch are we using?
-    let ratio = if delta_len == 0 {
-        0.0f32
-    } else {
-        delta_len as f32 / stretch as f32
-    };
-
-    // compute badness given the stretch ratio
-    let bad_linelen = if ratio.abs() > 1.0f32 {
-        BAD_INFTY
-    } else {
-        (BAD_MULT * ratio.powi(3).abs()) as i64
-    };
-
-    // we penalize lines ending in really short words
-    let bad_wordlen = if wlen >= stretch {
-        0
-    } else {
-        (DL_MULT
-            * ((stretch - wlen) as f32 / (stretch - 1) as f32)
-                .powi(3)
-                .abs()) as i64
-    };
-
-    // we penalize lines that have very different ratios from previous lines
-    let bad_delta_r = (DR_MULT * ((ratio - prev_rat) / 2.0).powi(3).abs()) as i64;
-
-    let demerits = i64::pow(1 + bad_linelen + bad_wordlen + bad_delta_r, 2);
-
-    (demerits, ratio)
-}
-
-fn restart_active_breaks<'a>(
-    args: &BreakArgs<'a>,
-    active: &LineBreak<'a>,
-    act_idx: usize,
-    w: &'a WordInfo<'a>,
-    slen: usize,
-    min: usize,
-) -> LineBreak<'a> {
-    let (break_before, line_length) = if active.fresh {
-        // never break before a word if that word would be the first on a line
-        (false, args.indent_len)
-    } else {
-        // choose the lesser evil: breaking too early, or breaking too late
-        let wlen = w.word_nchars + args.compute_width(w, active.length, active.fresh);
-        let underlen = min as isize - active.length as isize;
-        let overlen = (wlen + slen + active.length) as isize - args.opts.width as isize;
-        if overlen > underlen {
-            // break early, put this word on the next line
-            (true, args.indent_len + w.word_nchars)
-        } else {
-            (false, args.indent_len)
         }
-    };
+        if is_final(start) {
+            bcost += 150_i64 * 150 / (words[start].word_nchars as i64 + 2);
+        }
 
-    // restart the linebreak. This will be our only active path.
-    LineBreak {
-        prev: act_idx,
-        linebreak: Some(w),
-        break_before,
-        demerits: 0, // this is the only active break, so we can reset the demerit count
-        prev_rat: if break_before { 1.0 } else { -1.0 },
-        length: line_length,
-        fresh: !break_before,
+        best_cost[start] = best.saturating_add(bcost);
     }
+
+    let (_, line1_break, _) = best_break(
+        &words,
+        args.init_len,
+        0,
+        false,
+        args,
+        &best_cost,
+        &next_brk,
+        &line_len,
+    );
+
+    let mut breaks = vec![];
+    let mut idx = line1_break;
+    while idx < n {
+        breaks.push((words[idx], true));
+        idx = next_brk[idx];
+    }
+    breaks.reverse();
+    breaks
 }
 
 /// Number of spaces to add before a word, based on mode, newline, sentence start.
