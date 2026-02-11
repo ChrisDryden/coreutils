@@ -93,8 +93,7 @@ fn emit_words(words: &[&WordInfo], breaks: &[usize], args: &mut BreakArgs) -> st
     let mut breaks = breaks.iter().peekable();
     let mut prev_punct = false;
     for (i, w) in words.iter().enumerate() {
-        if breaks.peek() == Some(&&i) {
-            breaks.next();
+        if breaks.next_if(|&&b| b == i).is_some() {
             args.write_newline()?;
             args.write_word(&w.word[w.word_start..], 0)?;
         } else {
@@ -126,17 +125,26 @@ fn find_greedy_breakpoints(words: &[&WordInfo], args: &BreakArgs) -> Vec<usize> 
 }
 
 /// GNU-compatible cost functions: EQUIV(n) = n*n, SHORT_COST(n) = EQUIV(n*10)
-fn short_cost(d: i64) -> i64 {
+const fn short_cost(d: i64) -> i64 {
     (d * 10) * (d * 10)
 }
 
-fn ragged_cost(d: i64) -> i64 {
+const fn ragged_cost(d: i64) -> i64 {
     short_cost(d) / 2
 }
 
 const LINE_COST: i64 = 70 * 70;
 const SENTENCE_BONUS: i64 = 50 * 50;
 const NOBREAK_COST: i64 = 600 * 600;
+
+/// DP arrays for the backward pass: cost[i] is the min cost to format
+/// words[i..n] on a fresh line; next_brk[i] and line_len[i] record the
+/// best first break and resulting line length for a line starting at word i.
+struct DpState {
+    cost: Vec<i64>,
+    next_brk: Vec<usize>,
+    line_len: Vec<usize>,
+}
 
 /// Scan forward from `first_word`, extending a line that starts at `init_len`,
 /// and return `(cost, break_index, line_length)` for the best break point.
@@ -146,9 +154,7 @@ fn best_break(
     first_word: usize,
     prev_punct: bool,
     args: &BreakArgs,
-    best_cost: &[i64],
-    next_brk: &[usize],
-    line_len: &[usize],
+    dp: &DpState,
 ) -> (i64, usize, usize) {
     let n = words.len();
     let goal = args.opts.goal as i64;
@@ -165,14 +171,14 @@ fn best_break(
             0
         } else {
             short_cost(goal - len as i64)
-                + if next_brk[j] < n {
-                    ragged_cost(len as i64 - line_len[j] as i64)
+                + if dp.next_brk[j] < n {
+                    ragged_cost(len as i64 - dp.line_len[j] as i64)
                 } else {
                     0
                 }
         };
 
-        let wcost = lcost.saturating_add(best_cost[j]);
+        let wcost = lcost.saturating_add(dp.cost[j]);
         if wcost < best {
             best = wcost;
             best_j = j;
@@ -229,9 +235,11 @@ fn find_optimal_breakpoints(words: &[&WordInfo], args: &BreakArgs) -> Vec<usize>
         c
     };
 
-    let mut best_cost = vec![0i64; n + 1];
-    let mut next_brk = vec![n; n];
-    let mut line_len = vec![0usize; n];
+    let mut dp = DpState {
+        cost: vec![0i64; n + 1],
+        next_brk: vec![n; n],
+        line_len: vec![0usize; n],
+    };
 
     for start in (0..n).rev() {
         let (best, brk, ll) = best_break(
@@ -240,29 +248,19 @@ fn find_optimal_breakpoints(words: &[&WordInfo], args: &BreakArgs) -> Vec<usize>
             start + 1,
             words[start].ends_punct,
             args,
-            &best_cost,
-            &next_brk,
-            &line_len,
+            &dp,
         );
-        next_brk[start] = brk;
-        line_len[start] = ll;
-        best_cost[start] = best.saturating_add(base_cost(start));
+        dp.next_brk[start] = brk;
+        dp.line_len[start] = ll;
+        dp.cost[start] = best.saturating_add(base_cost(start));
     }
 
-    let (_, line1_break, _) = best_break(
-        words,
-        args.init_len,
-        0,
-        false,
-        args,
-        &best_cost,
-        &next_brk,
-        &line_len,
-    );
+    let (_, line1_break, _) =
+        best_break(words, args.init_len, 0, false, args, &dp);
 
     std::iter::successors(
         (line1_break < n).then_some(line1_break),
-        |&idx| (next_brk[idx] < n).then_some(next_brk[idx]),
+        |&idx| (dp.next_brk[idx] < n).then_some(dp.next_brk[idx]),
     )
     .collect()
 }
