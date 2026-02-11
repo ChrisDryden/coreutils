@@ -3,7 +3,7 @@
 // For the full copyright and license information, please view the LICENSE
 // file that was distributed with this source code.
 
-// spell-checker:ignore (ToDO) accum bcost breakwords lcost linebreak linebreaking linebreaks linelen maxlength minlength nchars ostream overlen parasplit plass posn punct slen sstart tabwidth tlen underlen wcost winfo wlen wordlen
+// spell-checker:ignore (ToDO) bcost lcost linebreak maxlength nchars ostream parasplit plass posn punct slen tabwidth wcost winfo wlen
 
 use std::io::{BufWriter, Stdout, Write};
 
@@ -20,16 +20,12 @@ struct BreakArgs<'a> {
 }
 
 impl BreakArgs<'_> {
-    fn compute_width(&self, winfo: &WordInfo, posn: usize, fresh: bool) -> usize {
-        if fresh {
-            0
-        } else {
-            let post = winfo.after_tab;
-            match winfo.before_tab {
-                None => post,
-                Some(pre) => {
-                    post + ((pre + posn) / self.opts.tabwidth + 1) * self.opts.tabwidth - posn
-                }
+    fn compute_width(&self, winfo: &WordInfo, posn: usize) -> usize {
+        let post = winfo.after_tab;
+        match winfo.before_tab {
+            None => post,
+            Some(pre) => {
+                post + ((pre + posn) / self.opts.tabwidth + 1) * self.opts.tabwidth - posn
             }
         }
     }
@@ -93,112 +89,49 @@ pub fn break_lines(
 
 /// `break_simple` implements a "greedy" breaking algorithm: print words until
 /// maxlength would be exceeded, then print a linebreak and indent and continue.
-fn break_simple<'a, T: Iterator<Item = &'a WordInfo<'a>>>(
-    mut iter: T,
+fn break_simple<'a>(
+    iter: impl Iterator<Item = &'a WordInfo<'a>>,
     args: &mut BreakArgs<'a>,
 ) -> std::io::Result<()> {
-    iter.try_fold((args.init_len, false), |(l, prev_punct), winfo| {
-        accum_words_simple(args, l, prev_punct, winfo)
-    })?;
-    args.ostream.write_all(b"\n")
-}
-
-fn accum_words_simple<'a>(
-    args: &mut BreakArgs<'a>,
-    l: usize,
-    prev_punct: bool,
-    winfo: &'a WordInfo<'a>,
-) -> std::io::Result<(usize, bool)> {
-    // compute the length of this word, considering how tabs will expand at this position on the line
-    let wlen = winfo.word_nchars + args.compute_width(winfo, l, false);
-
-    let slen = compute_slen(
-        args.uniform,
-        winfo.new_line,
-        winfo.sentence_start,
-        prev_punct,
-    );
-
-    if l + wlen + slen > args.opts.width {
-        write_newline(args.indent, args.ostream)?;
-        write_with_spaces(&winfo.word[winfo.word_start..], 0, args.ostream)?;
-        Ok((args.indent_len + winfo.word_nchars, winfo.ends_punct))
-    } else {
-        write_with_spaces(winfo.word, slen, args.ostream)?;
-        Ok((l + wlen + slen, winfo.ends_punct))
+    let mut l = args.init_len;
+    let mut prev_punct = false;
+    for winfo in iter {
+        let wlen = winfo.word_nchars + args.compute_width(winfo, l);
+        let slen = compute_slen(args.uniform, winfo.new_line, winfo.sentence_start, prev_punct);
+        if l + wlen + slen > args.opts.width {
+            write_newline(args.indent, args.ostream)?;
+            write_with_spaces(&winfo.word[winfo.word_start..], 0, args.ostream)?;
+            l = args.indent_len + winfo.word_nchars;
+        } else {
+            write_with_spaces(winfo.word, slen, args.ostream)?;
+            l += wlen + slen;
+        }
+        prev_punct = winfo.ends_punct;
     }
+    args.ostream.write_all(b"\n")
 }
 
 /// `break_knuth_plass` implements an "optimal" breaking algorithm in the style of
 /// Knuth, D.E., and Plass, M.F. "Breaking Paragraphs into Lines." in Software,
 /// Practice and Experience. Vol. 11, No. 11, November 1981.
 /// <http://onlinelibrary.wiley.com/doi/10.1002/spe.4380111102/pdf>
-fn break_knuth_plass<'a, T: Clone + Iterator<Item = &'a WordInfo<'a>>>(
-    mut iter: T,
+fn break_knuth_plass<'a>(
+    iter: impl Iterator<Item = &'a WordInfo<'a>>,
     args: &mut BreakArgs<'a>,
 ) -> std::io::Result<()> {
-    // run the algorithm to get the breakpoints
-    let breakpoints = find_kp_breakpoints(iter.clone(), args);
-
-    // iterate through the breakpoints (note that breakpoints is in reverse break order, so we .rev() it
-    let result: std::io::Result<(bool, bool)> = breakpoints.iter().rev().try_fold(
-        (false, false),
-        |(mut prev_punct, mut fresh), &(next_break, break_before)| {
-            if fresh {
-                write_newline(args.indent, args.ostream)?;
-            }
-            // at each breakpoint, keep emitting words until we find the word matching this breakpoint
-            for winfo in &mut iter {
-                let (slen, word) = slice_if_fresh(
-                    fresh,
-                    winfo.word,
-                    winfo.word_start,
-                    args.uniform,
-                    winfo.new_line,
-                    winfo.sentence_start,
-                    prev_punct,
-                );
-                fresh = false;
-                prev_punct = winfo.ends_punct;
-
-                // We find identical breakpoints here by comparing addresses of the references.
-                // This is OK because the backing vector is not mutating once we are linebreaking.
-                if std::ptr::eq(winfo, next_break) {
-                    // OK, we found the matching word
-                    if break_before {
-                        write_newline(args.indent, args.ostream)?;
-                        write_with_spaces(&winfo.word[winfo.word_start..], 0, args.ostream)?;
-                    } else {
-                        // breaking after this word, so that means "fresh" is true for the next iteration
-                        write_with_spaces(word, slen, args.ostream)?;
-                        fresh = true;
-                    }
-                    break;
-                }
-                write_with_spaces(word, slen, args.ostream)?;
-            }
-            Ok((prev_punct, fresh))
-        },
-    );
-    let (mut prev_punct, mut fresh) = result?;
-
-    // after the last linebreak, write out the rest of the final line.
-    for winfo in iter {
-        if fresh {
+    let (words, breaks) = find_kp_breakpoints(iter, args);
+    let mut prev_punct = false;
+    let mut brk = 0;
+    for (i, w) in words.iter().enumerate() {
+        if brk < breaks.len() && i == breaks[brk] {
             write_newline(args.indent, args.ostream)?;
+            write_with_spaces(&w.word[w.word_start..], 0, args.ostream)?;
+            brk += 1;
+        } else {
+            let slen = compute_slen(args.uniform, w.new_line, w.sentence_start, prev_punct);
+            write_with_spaces(w.word, slen, args.ostream)?;
         }
-        let (slen, word) = slice_if_fresh(
-            fresh,
-            winfo.word,
-            winfo.word_start,
-            args.uniform,
-            winfo.new_line,
-            winfo.sentence_start,
-            prev_punct,
-        );
-        prev_punct = winfo.ends_punct;
-        fresh = false;
-        write_with_spaces(word, slen, args.ostream)?;
+        prev_punct = w.ends_punct;
     }
     args.ostream.write_all(b"\n")
 }
@@ -266,7 +199,7 @@ fn best_break(
             words[j].sentence_start,
             prev_punct,
         );
-        let wlen = words[j].word_nchars + args.compute_width(words[j], len, false);
+        let wlen = words[j].word_nchars + args.compute_width(words[j], len);
         len += slen + wlen;
         prev_punct = words[j].ends_punct;
         j += 1;
@@ -281,14 +214,14 @@ fn best_break(
 
 /// GNU-compatible backward dynamic programming for optimal line breaking.
 /// Uses the same cost functions as GNU fmt to produce identical output.
-fn find_kp_breakpoints<'a, T: Iterator<Item = &'a WordInfo<'a>>>(
-    iter: T,
+fn find_kp_breakpoints<'a>(
+    iter: impl Iterator<Item = &'a WordInfo<'a>>,
     args: &BreakArgs<'a>,
-) -> Vec<(&'a WordInfo<'a>, bool)> {
+) -> (Vec<&'a WordInfo<'a>>, Vec<usize>) {
     let words: Vec<&WordInfo> = iter.collect();
     let n = words.len();
     if n == 0 {
-        return vec![];
+        return (words, vec![]);
     }
 
     let is_final = |i: usize| -> bool {
@@ -342,11 +275,10 @@ fn find_kp_breakpoints<'a, T: Iterator<Item = &'a WordInfo<'a>>>(
     let mut breaks = vec![];
     let mut idx = line1_break;
     while idx < n {
-        breaks.push((words[idx], true));
+        breaks.push(idx);
         idx = next_brk[idx];
     }
-    breaks.reverse();
-    breaks
+    (words, breaks)
 }
 
 /// Number of spaces to add before a word, based on mode, newline, sentence start.
@@ -355,24 +287,6 @@ fn compute_slen(uniform: bool, newline: bool, start: bool, punct: bool) -> usize
         if start || (newline && punct) { 2 } else { 1 }
     } else {
         0
-    }
-}
-
-/// If we're on a fresh line, `slen=0` and we slice off leading whitespace.
-/// Otherwise, compute `slen` and leave whitespace alone.
-fn slice_if_fresh(
-    fresh: bool,
-    word: &[u8],
-    start: usize,
-    uniform: bool,
-    newline: bool,
-    sstart: bool,
-    punct: bool,
-) -> (usize, &[u8]) {
-    if fresh {
-        (0, &word[start..])
-    } else {
-        (compute_slen(uniform, newline, sstart, punct), word)
     }
 }
 
