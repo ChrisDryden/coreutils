@@ -3,7 +3,7 @@
 // For the full copyright and license information, please view the LICENSE
 // file that was distributed with this source code.
 
-// spell-checker:ignore (ToDO) bcost lcost linebreak maxlength nchars ostream parasplit plass posn punct slen tabwidth wcost winfo wlen
+// spell-checker:ignore (ToDO) bcost lcost linebreak maxlength nchars ostream parasplit posn punct slen tabwidth wcost winfo wlen
 
 use std::io::{BufWriter, Stdout, Write};
 
@@ -83,7 +83,7 @@ pub fn break_lines(
     if opts.quick || para.mail_header {
         break_simple(p_words_words, &mut break_args)
     } else {
-        break_knuth_plass(p_words_words, &mut break_args)
+        break_optimal(p_words_words, &mut break_args)
     }
 }
 
@@ -111,15 +111,13 @@ fn break_simple<'a>(
     args.ostream.write_all(b"\n")
 }
 
-/// `break_knuth_plass` implements an "optimal" breaking algorithm in the style of
-/// Knuth, D.E., and Plass, M.F. "Breaking Paragraphs into Lines." in Software,
-/// Practice and Experience. Vol. 11, No. 11, November 1981.
-/// <http://onlinelibrary.wiley.com/doi/10.1002/spe.4380111102/pdf>
-fn break_knuth_plass<'a>(
+/// Optimal line breaking using backward dynamic programming with GNU fmt's
+/// cost model. Finds globally minimal-cost breakpoints, then emits the text.
+fn break_optimal<'a>(
     iter: impl Iterator<Item = &'a WordInfo<'a>>,
     args: &mut BreakArgs<'a>,
 ) -> std::io::Result<()> {
-    let (words, breaks) = find_kp_breakpoints(iter, args);
+    let (words, breaks) = find_optimal_breakpoints(iter, args);
     let mut prev_punct = false;
     let mut brk = 0;
     for (i, w) in words.iter().enumerate() {
@@ -212,9 +210,9 @@ fn best_break(
     (best, best_j, best_ll)
 }
 
-/// GNU-compatible backward dynamic programming for optimal line breaking.
-/// Uses the same cost functions as GNU fmt to produce identical output.
-fn find_kp_breakpoints<'a>(
+/// Backward DP for optimal line breaking. For each word position, computes
+/// the minimum-cost way to set the remaining text using GNU fmt's cost model.
+fn find_optimal_breakpoints<'a>(
     iter: impl Iterator<Item = &'a WordInfo<'a>>,
     args: &BreakArgs<'a>,
 ) -> (Vec<&'a WordInfo<'a>>, Vec<usize>) {
