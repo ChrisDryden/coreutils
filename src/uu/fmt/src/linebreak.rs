@@ -3,7 +3,7 @@
 // For the full copyright and license information, please view the LICENSE
 // file that was distributed with this source code.
 
-// spell-checker:ignore (ToDO) bcost lcost linebreak maxlength nchars ostream parasplit posn punct slen tabwidth wcost winfo wlen
+// spell-checker:ignore (ToDO) bcost lcost linebreak maxlength nchars ostream parasplit posn punct slen tabwidth wcost wlen
 
 use std::io::{BufWriter, Stdout, Write};
 
@@ -20,14 +20,24 @@ struct BreakArgs<'a> {
 }
 
 impl BreakArgs<'_> {
-    fn compute_width(&self, winfo: &WordInfo, posn: usize) -> usize {
-        let post = winfo.after_tab;
-        match winfo.before_tab {
-            None => post,
-            Some(pre) => {
-                post + ((pre + posn) / self.opts.tabwidth + 1) * self.opts.tabwidth - posn
-            }
+    fn compute_width(&self, w: &WordInfo, posn: usize) -> usize {
+        w.before_tab.map_or(w.after_tab, |pre| {
+            w.after_tab + ((pre + posn) / self.opts.tabwidth + 1) * self.opts.tabwidth - posn
+        })
+    }
+
+    fn write_newline(&mut self) -> std::io::Result<()> {
+        self.ostream.write_all(b"\n")?;
+        self.ostream.write_all(self.indent)
+    }
+
+    fn write_word(&mut self, word: &[u8], slen: usize) -> std::io::Result<()> {
+        match slen {
+            2 => self.ostream.write_all(b"  ")?,
+            1 => self.ostream.write_all(b" ")?,
+            _ => {}
         }
+        self.ostream.write_all(word)
     }
 }
 
@@ -36,102 +46,83 @@ pub fn break_lines(
     opts: &FmtOptions,
     ostream: &mut BufWriter<Stdout>,
 ) -> std::io::Result<()> {
-    // indent
-    let p_indent = &para.indent_str;
-    let p_indent_len = para.indent_len;
+    let indent = &para.indent_str;
+    let indent_len = para.indent_len;
 
-    // words
-    let p_words = ParaWords::new(opts, para);
-    let mut p_words_words = p_words.words();
+    let para_words = ParaWords::new(opts, para);
+    let mut iter = para_words.words();
 
-    // the first word will *always* appear on the first line
-    // make sure of this here
-    let Some(winfo) = p_words_words.next() else {
+    let Some(first) = iter.next() else {
         return ostream.write_all(b"\n");
     };
 
-    // print the init, if it exists, and get its length
-    let p_init_len = winfo.word_nchars
+    let init_len = first.word_nchars
         + if opts.crown || opts.tagged {
-            // handle "init" portion
             ostream.write_all(&para.init_str)?;
             para.init_len
         } else if !para.mail_header {
-            // for non-(crown, tagged) that's the same as a normal indent
-            ostream.write_all(p_indent)?;
-            p_indent_len
+            ostream.write_all(indent)?;
+            indent_len
         } else {
-            // except that mail headers get no indent at all
             0
         };
 
-    // write first word after writing init
-    ostream.write_all(winfo.word)?;
+    ostream.write_all(first.word)?;
 
-    // does this paragraph require uniform spacing?
     let uniform = para.mail_header || opts.uniform;
-
-    let mut break_args = BreakArgs {
+    let mut args = BreakArgs {
         opts,
-        init_len: p_init_len,
-        indent: p_indent,
-        indent_len: p_indent_len,
+        init_len,
+        indent,
+        indent_len,
         uniform,
         ostream,
     };
 
-    if opts.quick || para.mail_header {
-        break_simple(p_words_words, &mut break_args)
+    let words: Vec<&WordInfo> = iter.collect();
+    let breaks = if opts.quick || para.mail_header {
+        find_greedy_breakpoints(&words, &args)
     } else {
-        break_optimal(p_words_words, &mut break_args)
-    }
+        find_optimal_breakpoints(&words, &args)
+    };
+    emit_words(&words, &breaks, &mut args)
 }
 
-/// `break_simple` implements a "greedy" breaking algorithm: print words until
-/// maxlength would be exceeded, then print a linebreak and indent and continue.
-fn break_simple<'a>(
-    iter: impl Iterator<Item = &'a WordInfo<'a>>,
-    args: &mut BreakArgs<'a>,
-) -> std::io::Result<()> {
-    let mut l = args.init_len;
+/// Emit words, inserting line breaks at the specified indices.
+fn emit_words(words: &[&WordInfo], breaks: &[usize], args: &mut BreakArgs) -> std::io::Result<()> {
+    let mut breaks = breaks.iter().peekable();
     let mut prev_punct = false;
-    for winfo in iter {
-        let wlen = winfo.word_nchars + args.compute_width(winfo, l);
-        let slen = compute_slen(args.uniform, winfo.new_line, winfo.sentence_start, prev_punct);
-        if l + wlen + slen > args.opts.width {
-            write_newline(args.indent, args.ostream)?;
-            write_with_spaces(&winfo.word[winfo.word_start..], 0, args.ostream)?;
-            l = args.indent_len + winfo.word_nchars;
-        } else {
-            write_with_spaces(winfo.word, slen, args.ostream)?;
-            l += wlen + slen;
-        }
-        prev_punct = winfo.ends_punct;
-    }
-    args.ostream.write_all(b"\n")
-}
-
-/// Optimal line breaking using backward dynamic programming with GNU fmt's
-/// cost model. Finds globally minimal-cost breakpoints, then emits the text.
-fn break_optimal<'a>(
-    iter: impl Iterator<Item = &'a WordInfo<'a>>,
-    args: &mut BreakArgs<'a>,
-) -> std::io::Result<()> {
-    let (words, breaks) = find_optimal_breakpoints(iter, args);
-    let mut prev_punct = false;
-    let mut brk = 0;
     for (i, w) in words.iter().enumerate() {
-        if brk < breaks.len() && i == breaks[brk] {
-            write_newline(args.indent, args.ostream)?;
-            write_with_spaces(&w.word[w.word_start..], 0, args.ostream)?;
-            brk += 1;
+        if breaks.peek() == Some(&&i) {
+            breaks.next();
+            args.write_newline()?;
+            args.write_word(&w.word[w.word_start..], 0)?;
         } else {
             let slen = compute_slen(args.uniform, w.new_line, w.sentence_start, prev_punct);
-            write_with_spaces(w.word, slen, args.ostream)?;
+            args.write_word(w.word, slen)?;
         }
         prev_punct = w.ends_punct;
     }
     args.ostream.write_all(b"\n")
+}
+
+/// Greedy breaking: break before a word when it would exceed the line width.
+fn find_greedy_breakpoints(words: &[&WordInfo], args: &BreakArgs) -> Vec<usize> {
+    let mut breaks = vec![];
+    let mut l = args.init_len;
+    let mut prev_punct = false;
+    for (i, w) in words.iter().enumerate() {
+        let wlen = w.word_nchars + args.compute_width(w, l);
+        let slen = compute_slen(args.uniform, w.new_line, w.sentence_start, prev_punct);
+        if l + wlen + slen > args.opts.width {
+            breaks.push(i);
+            l = args.indent_len + w.word_nchars;
+        } else {
+            l += wlen + slen;
+        }
+        prev_punct = w.ends_punct;
+    }
+    breaks
 }
 
 /// GNU-compatible cost functions: EQUIV(n) = n*n, SHORT_COST(n) = EQUIV(n*10)
@@ -173,11 +164,12 @@ fn best_break(
         let lcost = if j >= n {
             0
         } else {
-            let mut c = short_cost(goal - len as i64);
-            if next_brk[j] < n {
-                c += ragged_cost(len as i64 - line_len[j] as i64);
-            }
-            c
+            short_cost(goal - len as i64)
+                + if next_brk[j] < n {
+                    ragged_cost(len as i64 - line_len[j] as i64)
+                } else {
+                    0
+                }
         };
 
         let wcost = lcost.saturating_add(best_cost[j]);
@@ -212,18 +204,29 @@ fn best_break(
 
 /// Backward DP for optimal line breaking. For each word position, computes
 /// the minimum-cost way to set the remaining text using GNU fmt's cost model.
-fn find_optimal_breakpoints<'a>(
-    iter: impl Iterator<Item = &'a WordInfo<'a>>,
-    args: &BreakArgs<'a>,
-) -> (Vec<&'a WordInfo<'a>>, Vec<usize>) {
-    let words: Vec<&WordInfo> = iter.collect();
+fn find_optimal_breakpoints(words: &[&WordInfo], args: &BreakArgs) -> Vec<usize> {
     let n = words.len();
     if n == 0 {
-        return (words, vec![]);
+        return vec![];
     }
 
     let is_final = |i: usize| -> bool {
         i == n - 1 || words[i + 1].sentence_start || (words[i + 1].new_line && words[i].ends_punct)
+    };
+
+    let base_cost = |start: usize| -> i64 {
+        let mut c = LINE_COST;
+        if start > 0 && words[start - 1].ends_punct {
+            if is_final(start - 1) {
+                c -= SENTENCE_BONUS;
+            } else {
+                c += NOBREAK_COST;
+            }
+        }
+        if is_final(start) {
+            c += 150_i64 * 150 / (words[start].word_nchars as i64 + 2);
+        }
+        c
     };
 
     let mut best_cost = vec![0i64; n + 1];
@@ -232,7 +235,7 @@ fn find_optimal_breakpoints<'a>(
 
     for start in (0..n).rev() {
         let (best, brk, ll) = best_break(
-            &words,
+            words,
             args.indent_len + words[start].word_nchars,
             start + 1,
             words[start].ends_punct,
@@ -243,24 +246,11 @@ fn find_optimal_breakpoints<'a>(
         );
         next_brk[start] = brk;
         line_len[start] = ll;
-
-        let mut bcost = LINE_COST;
-        if start > 0 && words[start - 1].ends_punct {
-            if is_final(start - 1) {
-                bcost -= SENTENCE_BONUS;
-            } else {
-                bcost += NOBREAK_COST;
-            }
-        }
-        if is_final(start) {
-            bcost += 150_i64 * 150 / (words[start].word_nchars as i64 + 2);
-        }
-
-        best_cost[start] = best.saturating_add(bcost);
+        best_cost[start] = best.saturating_add(base_cost(start));
     }
 
     let (_, line1_break, _) = best_break(
-        &words,
+        words,
         args.init_len,
         0,
         false,
@@ -270,40 +260,21 @@ fn find_optimal_breakpoints<'a>(
         &line_len,
     );
 
-    let mut breaks = vec![];
-    let mut idx = line1_break;
-    while idx < n {
-        breaks.push(idx);
-        idx = next_brk[idx];
-    }
-    (words, breaks)
+    std::iter::successors(
+        (line1_break < n).then_some(line1_break),
+        |&idx| (next_brk[idx] < n).then_some(next_brk[idx]),
+    )
+    .collect()
 }
 
 /// Number of spaces to add before a word, based on mode, newline, sentence start.
-fn compute_slen(uniform: bool, newline: bool, start: bool, punct: bool) -> usize {
-    if uniform || newline {
-        if start || (newline && punct) { 2 } else { 1 }
-    } else {
-        0
+fn compute_slen(uniform: bool, newline: bool, sentence_start: bool, prev_punct: bool) -> usize {
+    match (
+        uniform || newline,
+        sentence_start || (newline && prev_punct),
+    ) {
+        (true, true) => 2,
+        (true, false) => 1,
+        _ => 0,
     }
-}
-
-/// Write a newline and add the indent.
-fn write_newline(indent: &[u8], ostream: &mut BufWriter<Stdout>) -> std::io::Result<()> {
-    ostream.write_all(b"\n")?;
-    ostream.write_all(indent)
-}
-
-/// Write the word, along with slen spaces.
-fn write_with_spaces(
-    word: &[u8],
-    slen: usize,
-    ostream: &mut BufWriter<Stdout>,
-) -> std::io::Result<()> {
-    if slen == 2 {
-        ostream.write_all(b"  ")?;
-    } else if slen == 1 {
-        ostream.write_all(b" ")?;
-    }
-    ostream.write_all(word)
 }
