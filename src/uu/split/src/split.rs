@@ -21,13 +21,12 @@ use std::io::{BufRead, BufReader, BufWriter, ErrorKind, Read, Seek, SeekFrom, Wr
 use std::path::Path;
 use thiserror::Error;
 use uucore::display::Quotable;
-use uucore::error::{FromIo, UIoError, UResult, USimpleError, UUsageError};
+use uucore::error::{FromIo, UResult, USimpleError, UUsageError};
 use uucore::translate;
 
 use uucore::parser::parse_size::parse_size_u64;
 
 use uucore::format_usage;
-use uucore::uio_error;
 
 static OPT_BYTES: &str = "bytes";
 static OPT_LINE_BYTES: &str = "line-bytes";
@@ -1585,11 +1584,7 @@ fn split(settings: &Settings) -> UResult<()> {
                     // indicate that. A special error message needs to be
                     // printed in that case.
                     ErrorKind::Other => Err(USimpleError::new(1, format!("{e}"))),
-                    _ => Err(uio_error!(
-                        e,
-                        "{}",
-                        translate!("split-error-input-output-error")
-                    )),
+                    _ => Err(e.map_err_context(|| settings.input.maybe_quote().to_string())),
                 },
             }
         }
@@ -1607,11 +1602,7 @@ fn split(settings: &Settings) -> UResult<()> {
                     // indicate that. A special error message needs to be
                     // printed in that case.
                     ErrorKind::Other => Err(USimpleError::new(1, format!("{e}"))),
-                    _ => Err(uio_error!(
-                        e,
-                        "{}",
-                        translate!("split-error-input-output-error")
-                    )),
+                    _ => Err(e.map_err_context(|| settings.input.maybe_quote().to_string())),
                 },
             }
         }

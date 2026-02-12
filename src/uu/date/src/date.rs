@@ -436,16 +436,18 @@ pub fn uumain(args: impl uucore::Args) -> UResult<()> {
             Box::new(iter)
         }
         DateSource::File(ref path) => {
-            if path.is_dir() {
-                return Err(USimpleError::new(
-                    1,
-                    translate!("date-error-expected-file-got-directory", "path" => path.quote()),
-                ));
-            }
             let file =
                 File::open(path).map_err_context(|| path.as_os_str().maybe_quote().to_string())?;
             let lines = BufReader::new(file).lines();
-            let iter = lines.map_while(Result::ok).map(|s| parse_date(s, &now));
+            let path_ctx = format!(
+                "{}",
+                translate!("date-error-read", "path" => path.maybe_quote())
+            );
+            let iter = lines
+                .collect::<std::io::Result<Vec<_>>>()
+                .map_err_context(|| path_ctx)?
+                .into_iter()
+                .map(|s| parse_date(s, &now));
             Box::new(iter)
         }
         DateSource::FileMtime(ref path) => {

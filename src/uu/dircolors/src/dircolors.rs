@@ -16,7 +16,7 @@ use std::path::Path;
 use clap::{Arg, ArgAction, Command};
 use uucore::colors::{FILE_ATTRIBUTE_CODES, FILE_COLORS, FILE_TYPES, TERMS};
 use uucore::display::Quotable;
-use uucore::error::{UResult, USimpleError, UUsageError};
+use uucore::error::{FromIo, UResult, USimpleError, UUsageError};
 use uucore::translate;
 
 use uucore::{format_usage, parser::parse_glob};
@@ -207,17 +207,18 @@ pub fn uumain(args: impl uucore::Args) -> UResult<()> {
         );
     } else {
         let path = Path::new(&files[0]);
-        if path.is_dir() {
-            return Err(USimpleError::new(
-                1,
-                translate!("dircolors-error-expected-file-got-directory", "path" => path.quote()),
-            ));
-        }
         match File::open(path) {
             Ok(f) => {
-                let fin = BufReader::new(f);
+                let path_ctx = format!(
+                    "{}",
+                    translate!("dircolors-error-read", "path" => path.maybe_quote())
+                );
+                let lines = BufReader::new(f)
+                    .lines()
+                    .collect::<std::io::Result<Vec<_>>>()
+                    .map_err_context(|| path_ctx)?;
                 result = parse(
-                    fin.lines().map_while(Result::ok),
+                    lines.iter().map(String::as_str),
                     &out_format,
                     &path.to_string_lossy(),
                 );

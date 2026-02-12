@@ -277,10 +277,8 @@ fn test_helper(file_name: &str, term: &str) {
 fn test_dircolors_for_dir_as_file() {
     let result = new_ucmd!().args(&["-c", "/"]).fails_with_code(1);
     result.no_stdout();
-    assert_eq!(
-        result.stderr_str().trim(),
-        "dircolors: expected file, got directory '/'",
-    );
+    result.stderr_contains("read error");
+    result.stderr_contains("Is a directory");
 }
 
 #[test]
