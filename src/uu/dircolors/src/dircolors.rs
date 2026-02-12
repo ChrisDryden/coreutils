@@ -209,7 +209,7 @@ pub fn uumain(args: impl uucore::Args) -> UResult<()> {
         let path = Path::new(&files[0]);
         if path.is_dir() {
             return Err(USimpleError::new(
-                2,
+                1,
                 translate!("dircolors-error-expected-file-got-directory", "path" => path.quote()),
             ));
         }

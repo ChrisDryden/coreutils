@@ -438,7 +438,7 @@ pub fn uumain(args: impl uucore::Args) -> UResult<()> {
         DateSource::File(ref path) => {
             if path.is_dir() {
                 return Err(USimpleError::new(
-                    2,
+                    1,
                     translate!("date-error-expected-file-got-directory", "path" => path.quote()),
                 ));
             }
