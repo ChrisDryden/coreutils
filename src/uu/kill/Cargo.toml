@@ -23,8 +23,6 @@ clap = { workspace = true }
 uucore = { workspace = true, features = ["signals"] }
 fluent = { workspace = true }
 
-[target.'cfg(unix)'.dependencies]
-nix = { workspace = true, features = ["signal"] }
 
 [[bin]]
 name = "kill"

@@ -2,7 +2,7 @@
 //
 // For the full copyright and license information, please view the LICENSE
 // file that was distributed with this source code.
-// spell-checker:ignore IAMNOTASIGNAL
+// spell-checker:ignore IAMNOTASIGNAL RTMIN RTMAX SIGRTMIN SIGRTMAX
 use regex::Regex;
 use std::os::unix::process::ExitStatusExt;
 use std::process::{Child, Command};
@@ -418,4 +418,78 @@ fn test_kill_signal_only_no_pid() {
         .arg("-TERM")
         .fails()
         .stderr_contains("no process ID specified");
+}
+
+#[cfg(any(target_os = "linux", target_os = "android"))]
+#[test]
+fn test_kill_rt_signal_list_and_table() {
+    for flag in ["-l", "-t"] {
+        let result = new_ucmd!().arg(flag).succeeds();
+        let out = result.stdout_str();
+        assert!(out.contains("RTMIN"), "{flag} missing RTMIN");
+        assert!(out.contains("RTMAX"), "{flag} missing RTMAX");
+    }
+    let table = new_ucmd!().arg("-t").succeeds();
+    let out = table.stdout_str();
+    assert!(out.contains("34 RTMIN"));
+    assert!(out.contains("64 RTMAX"));
+}
+
+#[cfg(any(target_os = "linux", target_os = "android"))]
+#[test]
+fn test_kill_rt_signal_name_to_number() {
+    for (name, expected) in [
+        ("RTMIN", "34"),
+        ("RTMAX", "64"),
+        ("RTMIN+1", "35"),
+        ("RTMAX-1", "63"),
+        ("SIGRTMIN", "34"),
+        ("SIGRTMIN+3", "37"),
+    ] {
+        new_ucmd!()
+            .arg("-l")
+            .arg(name)
+            .succeeds()
+            .stdout_only(format!("{expected}\n"));
+    }
+}
+
+#[cfg(any(target_os = "linux", target_os = "android"))]
+#[test]
+fn test_kill_rt_signal_number_to_name() {
+    for (num, expected) in [
+        ("34", "RTMIN"),
+        ("64", "RTMAX"),
+        ("35", "RTMIN+1"),
+        ("63", "RTMAX-1"),
+    ] {
+        new_ucmd!()
+            .arg("-l")
+            .arg(num)
+            .succeeds()
+            .stdout_only(format!("{expected}\n"));
+    }
+}
+
+#[cfg(any(target_os = "linux", target_os = "android"))]
+#[test]
+fn test_kill_rt_signal_send() {
+    let mut target = Target::new();
+    new_ucmd!()
+        .arg("-s")
+        .arg("RTMIN")
+        .arg(format!("{}", target.pid()))
+        .succeeds();
+    assert_eq!(target.wait_for_signal(), Some(libc::SIGRTMIN()));
+}
+
+#[cfg(any(target_os = "linux", target_os = "android"))]
+#[test]
+fn test_kill_rt_signal_all_numbers_listable() {
+    for sig in 0..=libc::SIGRTMAX() {
+        if sig >= 32 && sig < libc::SIGRTMIN() {
+            continue;
+        }
+        new_ucmd!().arg("-l").arg(format!("{sig}")).succeeds();
+    }
 }

@@ -398,17 +398,98 @@ pub fn signal_by_name_or_value(signal_name_or_value: &str) -> Option<usize> {
     }
     let signal_name = signal_name_upcase.trim_start_matches("SIG");
 
-    ALL_SIGNALS.iter().position(|&s| s == signal_name)
+    if let Some(pos) = ALL_SIGNALS.iter().position(|&s| s == signal_name) {
+        return Some(pos);
+    }
+
+    #[cfg(any(target_os = "linux", target_os = "android"))]
+    if let Some(val) = parse_rt_signal_name(signal_name) {
+        return Some(val);
+    }
+
+    None
 }
 
 /// Returns true if the given number is a valid signal number.
 pub fn is_signal(num: usize) -> bool {
-    num < ALL_SIGNALS.len()
+    num <= max_signal_value() && signal_name_by_value_extended(num).is_some()
 }
 
 /// Returns the signal name for a given signal value.
 pub fn signal_name_by_value(signal_value: usize) -> Option<&'static str> {
     ALL_SIGNALS.get(signal_value).copied()
+}
+
+/// Returns the signal name for any signal value, including RT signals.
+pub fn signal_name_by_value_extended(value: usize) -> Option<String> {
+    if let Some(name) = signal_name_by_value(value) {
+        return Some(name.to_string());
+    }
+    #[cfg(any(target_os = "linux", target_os = "android"))]
+    return rt_signal_name(value);
+    #[cfg(not(any(target_os = "linux", target_os = "android")))]
+    None
+}
+
+/// Returns the highest valid signal number on this system.
+pub fn max_signal_value() -> usize {
+    #[cfg(any(target_os = "linux", target_os = "android"))]
+    return nix::libc::SIGRTMAX() as usize;
+    #[cfg(not(any(target_os = "linux", target_os = "android")))]
+    return ALL_SIGNALS.len() - 1;
+}
+
+#[cfg(any(target_os = "linux", target_os = "android"))]
+fn rt_signal_name(value: usize) -> Option<String> {
+    let rtmin = nix::libc::SIGRTMIN() as usize;
+    let rtmax = nix::libc::SIGRTMAX() as usize;
+    if value < ALL_SIGNALS.len() || value > rtmax {
+        return None;
+    }
+    let mid = usize::midpoint(rtmin, rtmax);
+    Some(match value {
+        v if v == rtmin => "RTMIN".into(),
+        v if v == rtmax => "RTMAX".into(),
+        v if v < rtmin => format!("RTMIN-{}", rtmin - v),
+        v if v <= mid => format!("RTMIN+{}", v - rtmin),
+        v => format!("RTMAX-{}", rtmax - v),
+    })
+}
+
+#[cfg(any(target_os = "linux", target_os = "android"))]
+fn parse_rt_signal_name(name: &str) -> Option<usize> {
+    let rtmin = nix::libc::SIGRTMIN() as usize;
+    let rtmax = nix::libc::SIGRTMAX() as usize;
+    match name {
+        "RTMIN" => Some(rtmin),
+        "RTMAX" => Some(rtmax),
+        _ => name
+            .strip_prefix("RTMIN+")
+            .and_then(|s| s.parse::<usize>().ok())
+            .map(|n| rtmin + n)
+            .or_else(|| {
+                name.strip_prefix("RTMIN-")
+                    .and_then(|s| s.parse::<usize>().ok())
+                    .map(|n| rtmin.wrapping_sub(n))
+            })
+            .or_else(|| {
+                name.strip_prefix("RTMAX-")
+                    .and_then(|s| s.parse::<usize>().ok())
+                    .map(|n| rtmax - n)
+            })
+            .filter(|&v| v >= ALL_SIGNALS.len() && v <= rtmax),
+    }
+}
+
+/// Sends a signal to a process. Works for all signals including real-time.
+#[cfg(unix)]
+pub fn kill(pid: i32, sig: usize) -> std::io::Result<()> {
+    // SAFETY: libc::kill is a standard POSIX function
+    if unsafe { nix::libc::kill(pid, sig as nix::libc::c_int) } == 0 {
+        Ok(())
+    } else {
+        Err(std::io::Error::last_os_error())
+    }
 }
 
 /// Restores SIGPIPE to default behavior (process terminates on broken pipe).

@@ -6,14 +6,11 @@
 // spell-checker:ignore (ToDO) signalname pids killpg
 
 use clap::{Arg, ArgAction, Command};
-use nix::sys::signal::{self, Signal};
-use nix::unistd::Pid;
-use std::io::Error;
 use uucore::display::Quotable;
 use uucore::error::{FromIo, UResult, USimpleError};
 use uucore::translate;
 
-use uucore::signals::{ALL_SIGNALS, signal_by_name_or_value, signal_name_by_value};
+use uucore::signals::{max_signal_value, signal_by_name_or_value, signal_name_by_value_extended};
 use uucore::{format_usage, show};
 
 // When the -l option is selected, the program displays the type of signal related to a certain
@@ -63,18 +60,6 @@ pub fn uumain(args: impl uucore::Args) -> UResult<()> {
                 parse_signal_value(signal)?
             } else {
                 15_usize //SIGTERM
-            };
-
-            let sig_name = signal_name_by_value(sig);
-            // Signal does not support converting from EXIT
-            // Instead, nix::signal::kill expects Option::None to properly handle EXIT
-            let sig: Option<Signal> = if sig_name.is_some_and(|name| name == "EXIT") {
-                None
-            } else {
-                let sig = (sig as i32)
-                    .try_into()
-                    .map_err(|e| Error::from_raw_os_error(e as i32))?;
-                Some(sig)
             };
 
             let pids = parse_pids(&pids_or_signals)?;
@@ -159,34 +144,38 @@ fn handle_obsolete(args: &mut Vec<String>) -> Option<usize> {
 }
 
 fn table() {
-    for (idx, signal) in ALL_SIGNALS.iter().enumerate() {
-        println!("{idx: >#2} {signal}");
+    for sig in 0..=max_signal_value() {
+        if let Some(name) = signal_name_by_value_extended(sig) {
+            println!("{sig: >#2} {name}");
+        }
     }
 }
 
 fn print_signal(signal_name_or_value: &str) -> UResult<()> {
-    // Closure used to track the last 8 bits of the signal value
-    // when the -l option is passed only the lower 8 bits are important
-    // or the value is in range [128, 159]
-    // Example: kill -l 143 => TERM because 143 = 15 + 128
-    // Example: kill -l 2304 => EXIT
-    let lower_8_bits = |x: usize| x & 0xff;
-    let option_num_parse = signal_name_or_value.parse::<usize>().ok();
+    let option_num = signal_name_or_value.parse::<usize>().ok();
 
-    for (value, &signal) in ALL_SIGNALS.iter().enumerate() {
-        if signal.eq_ignore_ascii_case(signal_name_or_value)
-            || format!("SIG{signal}").eq_ignore_ascii_case(signal_name_or_value)
-        {
+    if let Some(value) = signal_by_name_or_value(signal_name_or_value) {
+        if option_num.is_some() {
+            if let Some(name) = signal_name_by_value_extended(value) {
+                println!("{name}");
+                return Ok(());
+            }
+        } else {
             println!("{value}");
-            return Ok(());
-        } else if signal_name_or_value == value.to_string()
-            || option_num_parse.is_some_and(|signal_value| lower_8_bits(signal_value) == value)
-            || option_num_parse.is_some_and(|signal_value| signal_value == value + OFFSET)
-        {
-            println!("{signal}");
             return Ok(());
         }
     }
+
+    // Handle offset: ksh adds 256, standard adds 128 to signal value
+    if let Some(num) = option_num {
+        for candidate in [num & 0xff, num.wrapping_sub(OFFSET)] {
+            if let Some(name) = signal_name_by_value_extended(candidate) {
+                println!("{name}");
+                return Ok(());
+            }
+        }
+    }
+
     Err(USimpleError::new(
         1,
         translate!("kill-error-invalid-signal", "signal" => signal_name_or_value.quote()),
@@ -194,8 +183,10 @@ fn print_signal(signal_name_or_value: &str) -> UResult<()> {
 }
 
 fn print_signals() {
-    for signal in ALL_SIGNALS {
-        println!("{signal}");
+    for sig in 0..=max_signal_value() {
+        if let Some(name) = signal_name_by_value_extended(sig) {
+            println!("{name}");
+        }
     }
 }
 
@@ -235,13 +226,10 @@ fn parse_pids(pids: &[String]) -> UResult<Vec<i32>> {
         .collect()
 }
 
-fn kill(sig: Option<Signal>, pids: &[i32]) {
+fn kill(sig: usize, pids: &[i32]) {
     for &pid in pids {
-        if let Err(e) = signal::kill(Pid::from_raw(pid), sig) {
-            show!(
-                Error::from_raw_os_error(e as i32)
-                    .map_err_context(|| { translate!("kill-error-sending-signal", "pid" => pid) })
-            );
+        if let Err(e) = uucore::signals::kill(pid, sig) {
+            show!(e.map_err_context(|| { translate!("kill-error-sending-signal", "pid" => pid) }));
         }
     }
 }
