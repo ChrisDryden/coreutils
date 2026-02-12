@@ -843,7 +843,20 @@ pub fn make_fifo(path: &Path) -> std::io::Result<()> {
     let name = CString::new(path.to_str().unwrap()).unwrap();
     let err = unsafe { mkfifo(name.as_ptr(), 0o666) };
     if err == -1 {
-        Err(Error::from_raw_os_error(err))
+        Err(Error::last_os_error())
+    } else {
+        Ok(())
+    }
+}
+
+/// Create a special file (device node, socket, etc.) via `mknod(2)`.
+#[cfg(unix)]
+pub fn make_node(path: &Path, mode: mode_t, dev: libc::dev_t) -> std::io::Result<()> {
+    let name = CString::new(path.as_os_str().as_encoded_bytes())
+        .map_err(|e| Error::new(ErrorKind::InvalidInput, e))?;
+    let ret = unsafe { libc::mknod(name.as_ptr(), mode, dev) };
+    if ret == -1 {
+        Err(Error::last_os_error())
     } else {
         Ok(())
     }

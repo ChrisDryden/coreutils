@@ -1922,7 +1922,7 @@ fn test_move_should_not_fallback_to_copy() {
 #[cfg(target_os = "linux")]
 mod inter_partition_copying {
     use std::fs::{self, set_permissions, write};
-    use std::os::unix::fs::{PermissionsExt, symlink};
+    use std::os::unix::fs::{FileTypeExt, PermissionsExt, symlink};
     use tempfile::TempDir;
     use uutests::util::TestScenario;
     use uutests::util_name;
@@ -2471,6 +2471,36 @@ mod inter_partition_copying {
         assert!(!at.dir_exists("dir"));
         let moved_fifo = other_fs_tempdir.path().join("dir/fifo");
         assert!(moved_fifo.symlink_metadata().unwrap().file_type().is_fifo());
+    }
+
+    #[test]
+    fn test_mv_special_files_across_partitions() {
+        use std::os::unix::net::UnixListener;
+
+        if uucore::process::geteuid() != 0 {
+            print!("Test skipped; requires root user");
+            return;
+        }
+
+        let scene = TestScenario::new(util_name!());
+        let at = &scene.fixtures;
+
+        uucore::fs::make_node(&at.plus("devnull"), libc::S_IFCHR | 0o666, libc::makedev(1, 3))
+            .unwrap();
+        let _listener = UnixListener::bind(at.plus("test.sock")).unwrap();
+
+        let dest = TempDir::new_in("/dev/shm/").unwrap();
+        scene
+            .ucmd()
+            .arg("devnull")
+            .arg("test.sock")
+            .arg(dest.path())
+            .succeeds();
+
+        assert!(!at.plus("devnull").exists());
+        assert!(!at.plus("test.sock").exists());
+        assert!(dest.path().join("devnull").symlink_metadata().unwrap().file_type().is_char_device());
+        assert!(dest.path().join("test.sock").symlink_metadata().unwrap().file_type().is_socket());
     }
 }
 

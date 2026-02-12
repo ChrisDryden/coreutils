@@ -40,7 +40,7 @@ use uucore::error::{FromIo, UResult, USimpleError, UUsageError, set_exit_code};
 #[cfg(unix)]
 use uucore::fs::display_permissions_unix;
 #[cfg(unix)]
-use uucore::fs::make_fifo;
+use uucore::fs::{make_fifo, make_node};
 use uucore::fs::{
     MissingHandling, ResolveMode, are_hardlinks_or_one_way_symlink_to_same_file,
     are_hardlinks_to_same_file, canonicalize, path_ends_with_terminator,
@@ -861,6 +861,13 @@ fn rename_with_fallback(
             rename_fifo_fallback(from, to)
         } else {
             #[cfg(unix)]
+            if file_type.is_block_device()
+                || file_type.is_char_device()
+                || file_type.is_socket()
+            {
+                return rename_special_fallback(from, to, &metadata);
+            }
+            #[cfg(unix)]
             {
                 with_optional_hardlink_context(
                     hardlink_tracker,
@@ -892,6 +899,17 @@ fn rename_fifo_fallback(from: &Path, to: &Path) -> io::Result<()> {
 )]
 fn rename_fifo_fallback(_from: &Path, _to: &Path) -> io::Result<()> {
     Ok(())
+}
+
+/// Recreate a special file (device node, socket) on the destination filesystem.
+#[cfg(unix)]
+fn rename_special_fallback(from: &Path, to: &Path, metadata: &fs::Metadata) -> io::Result<()> {
+    use std::os::unix::fs::MetadataExt;
+    if to.try_exists()? {
+        fs::remove_file(to)?;
+    }
+    make_node(to, metadata.mode(), metadata.rdev())?;
+    fs::remove_file(from)
 }
 
 /// Move the given symlink to the given destination. On Windows, dangling
