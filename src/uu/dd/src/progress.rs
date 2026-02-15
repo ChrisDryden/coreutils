@@ -448,11 +448,25 @@ pub(crate) fn gen_prog_updater(
     }
 }
 
-/// signal handler listens for SIGUSR1 signal and runs provided closure.
+/// Signal handler that listens for SIGUSR1 signal and runs provided closure.
 #[cfg(target_os = "linux")]
 pub(crate) struct SignalHandler {
     handle: Handle,
     thread: Option<JoinHandle<()>>,
+}
+
+#[cfg(target_os = "linux")]
+fn debug_log(msg: &str) {
+    use std::fs::OpenOptions;
+    use std::io::Write;
+    let pid = std::process::id();
+    if let Ok(mut f) = OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open("/tmp/dd_signal_debug.log")
+    {
+        let _ = writeln!(f, "[PID {}] {}", pid, msg);
+    }
 }
 
 #[cfg(target_os = "linux")]
@@ -465,13 +479,17 @@ impl SignalHandler {
 
         let mut signals = Signals::new([SIGUSR1])?;
         let handle = signals.handle();
+
         let thread = std::thread::spawn(move || {
+            debug_log("Signal handler thread started");
             for signal in &mut signals {
+                debug_log(&format!("Signal handler thread received signal: {}", signal));
                 match signal {
                     SIGUSR1 => (*f)(),
                     _ => unreachable!(),
                 }
             }
+            debug_log("Signal handler thread exiting (iterator returned None)");
         });
 
         Ok(Self {
@@ -484,10 +502,24 @@ impl SignalHandler {
 #[cfg(target_os = "linux")]
 impl Drop for SignalHandler {
     fn drop(&mut self) {
-        self.handle.close();
-        if let Some(thread) = std::mem::take(&mut self.thread) {
-            thread.join().unwrap();
+        debug_log("SignalHandler::drop() called");
+
+        // Check if thread is still running
+        if let Some(ref thread) = self.thread {
+            debug_log(&format!("Thread is_finished: {}", thread.is_finished()));
         }
+
+        debug_log("About to call handle.close()");
+        self.handle.close();
+        debug_log("handle.close() completed");
+
+        if let Some(thread) = self.thread.take() {
+            debug_log("About to join thread");
+            let _ = thread.join();
+            debug_log("Thread joined");
+        }
+
+        debug_log("SignalHandler::drop() completed");
     }
 }
 
