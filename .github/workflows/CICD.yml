@@ -43,11 +43,15 @@ jobs:
         persist-credentials: false
     - uses: dtolnay/rust-toolchain@stable
     - uses: Swatinem/rust-cache@v2
-    - name: build and test shuf, sleep, sort individually
+    - name: build and test shuf, sleep, sort individually (5 iterations)
       shell: bash
       run: |
-        for f in shuf sleep sort
+        for i in 1 2 3 4 5
         do
-          echo "Building and testing $f"
-          cargo test -p "uu_$f" -p coreutils --features=$f --no-default-features
+          echo "========== Iteration $i/5 =========="
+          for f in shuf sleep sort
+          do
+            echo "Building and testing $f"
+            cargo test -p "uu_$f" -p coreutils --features=$f --no-default-features
+          done
         done
