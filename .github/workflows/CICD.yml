@@ -30,183 +30,24 @@ concurrency:
   cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
 
 jobs:
-  coverage:
-    name: Code Coverage (run ${{ matrix.job.run }})
-    runs-on: ${{ matrix.job.os }}
-    timeout-minutes: 90
-    env:
-      SCCACHE_GHA_ENABLED: "true"
-      RUSTC_WRAPPER: "sccache"
-      CARGO_INCREMENTAL: 0
+  test_separately:
+    name: Separate Builds (individual and coreutils) (run ${{ matrix.run }})
+    runs-on: windows-latest
     strategy:
       fail-fast: false
       matrix:
-        job:
-          - { os: ubuntu-latest  , features: dd, toolchain: nightly, run: 1 }
-          - { os: ubuntu-latest  , features: dd, toolchain: nightly, run: 2 }
-          - { os: ubuntu-latest  , features: dd, toolchain: nightly, run: 3 }
-          - { os: ubuntu-latest  , features: dd, toolchain: nightly, run: 4 }
-          - { os: ubuntu-latest  , features: dd, toolchain: nightly, run: 5 }
-          - { os: ubuntu-latest  , features: dd, toolchain: nightly, run: 6 }
-          - { os: ubuntu-latest  , features: dd, toolchain: nightly, run: 7 }
-          - { os: ubuntu-latest  , features: dd, toolchain: nightly, run: 8 }
-          - { os: ubuntu-latest  , features: dd, toolchain: nightly, run: 9 }
-          - { os: ubuntu-latest  , features: dd, toolchain: nightly, run: 10 }
-          - { os: ubuntu-latest  , features: dd, toolchain: nightly, run: 11 }
-          - { os: ubuntu-latest  , features: dd, toolchain: nightly, run: 12 }
-          - { os: ubuntu-latest  , features: dd, toolchain: nightly, run: 13 }
-          - { os: ubuntu-latest  , features: dd, toolchain: nightly, run: 14 }
-          - { os: ubuntu-latest  , features: dd, toolchain: nightly, run: 15 }
-          - { os: ubuntu-latest  , features: dd, toolchain: nightly, run: 16 }
-          - { os: ubuntu-latest  , features: dd, toolchain: nightly, run: 17 }
-          - { os: ubuntu-latest  , features: dd, toolchain: nightly, run: 18 }
-          - { os: ubuntu-latest  , features: dd, toolchain: nightly, run: 19 }
-          - { os: ubuntu-latest  , features: dd, toolchain: nightly, run: 20 }
-          - { os: ubuntu-latest  , features: dd, toolchain: nightly, run: 21 }
-          - { os: ubuntu-latest  , features: dd, toolchain: nightly, run: 22 }
-          - { os: ubuntu-latest  , features: dd, toolchain: nightly, run: 23 }
-          - { os: ubuntu-latest  , features: dd, toolchain: nightly, run: 24 }
-          - { os: ubuntu-latest  , features: dd, toolchain: nightly, run: 25 }
-          - { os: ubuntu-latest  , features: dd, toolchain: nightly, run: 26 }
-          - { os: ubuntu-latest  , features: dd, toolchain: nightly, run: 27 }
-          - { os: ubuntu-latest  , features: dd, toolchain: nightly, run: 28 }
-          - { os: ubuntu-latest  , features: dd, toolchain: nightly, run: 29 }
-          - { os: ubuntu-latest  , features: dd, toolchain: nightly, run: 30 }
-          - { os: ubuntu-latest  , features: dd, toolchain: nightly, run: 31 }
-          - { os: ubuntu-latest  , features: dd, toolchain: nightly, run: 32 }
-          - { os: ubuntu-latest  , features: dd, toolchain: nightly, run: 33 }
-          - { os: ubuntu-latest  , features: dd, toolchain: nightly, run: 34 }
-          - { os: ubuntu-latest  , features: dd, toolchain: nightly, run: 35 }
-          - { os: ubuntu-latest  , features: dd, toolchain: nightly, run: 36 }
-          - { os: ubuntu-latest  , features: dd, toolchain: nightly, run: 37 }
-          - { os: ubuntu-latest  , features: dd, toolchain: nightly, run: 38 }
-          - { os: ubuntu-latest  , features: dd, toolchain: nightly, run: 39 }
-          - { os: ubuntu-latest  , features: dd, toolchain: nightly, run: 40 }
-          - { os: ubuntu-latest  , features: dd, toolchain: nightly, run: 41 }
-          - { os: ubuntu-latest  , features: dd, toolchain: nightly, run: 42 }
-          - { os: ubuntu-latest  , features: dd, toolchain: nightly, run: 43 }
-          - { os: ubuntu-latest  , features: dd, toolchain: nightly, run: 44 }
-          - { os: ubuntu-latest  , features: dd, toolchain: nightly, run: 45 }
-          - { os: ubuntu-latest  , features: dd, toolchain: nightly, run: 46 }
-          - { os: ubuntu-latest  , features: dd, toolchain: nightly, run: 47 }
-          - { os: ubuntu-latest  , features: dd, toolchain: nightly, run: 48 }
-          - { os: ubuntu-latest  , features: dd, toolchain: nightly, run: 49 }
-          - { os: ubuntu-latest  , features: dd, toolchain: nightly, run: 50 }
+        run: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45, 46, 47, 48, 49, 50]
     steps:
     - uses: actions/checkout@v6
-    - uses: dtolnay/rust-toolchain@master
       with:
-        toolchain: ${{ matrix.job.toolchain }}
-        components: rustfmt
-    - uses: taiki-e/install-action@v2
-      with:
-        tool: nextest,grcov@0.8.24
-
-    - name: Run sccache-cache
-      uses: mozilla-actions/sccache-action@v0.0.9
-
-    # - name: Reattach HEAD ## may be needed for accurate code coverage info
-    #   run: git checkout ${{ github.head_ref }}
-
-    - name: Initialize workflow variables
-      id: vars
+        persist-credentials: false
+    - uses: dtolnay/rust-toolchain@stable
+    - uses: Swatinem/rust-cache@v2
+    - name: build and test shuf, sleep, sort individually
       shell: bash
       run: |
-        ## VARs setup
-        outputs() { step_id="${{ github.action }}"; for var in "$@" ; do echo steps.${step_id}.outputs.${var}="${!var}"; echo "${var}=${!var}" >> $GITHUB_OUTPUT; done; }
-
-        # toolchain
-        TOOLCHAIN="nightly" ## default to "nightly" toolchain (required for certain required unstable compiler flags) ## !maint: refactor when stable channel has needed support
-
-        # * specify gnu-type TOOLCHAIN for windows; `grcov` requires gnu-style code coverage data files
-        case ${{ matrix.job.os }} in windows-*) TOOLCHAIN="$TOOLCHAIN-x86_64-pc-windows-gnu" ;; esac;
-
-        # * use requested TOOLCHAIN if specified
-        if [ -n "${{ matrix.job.toolchain }}" ]; then TOOLCHAIN="${{ matrix.job.toolchain }}" ; fi
-        outputs TOOLCHAIN
-
-        # target-specific options
-
-        # * CARGO_FEATURES_OPTION
-        CARGO_FEATURES_OPTION='--all-features' ;  ## default to '--all-features' for code coverage
-        if [ -n "${{ matrix.job.features }}" ]; then CARGO_FEATURES_OPTION='--features=${{ matrix.job.features }}' ; fi
-        outputs CARGO_FEATURES_OPTION
-
-        # * CODECOV_FLAGS
-        CODECOV_FLAGS=$( echo "${{ matrix.job.os }}" | sed 's/[^[:alnum:]]/_/g' )
-        outputs CODECOV_FLAGS
-
-    - name: Install/setup prerequisites
-      shell: bash
-      run: |
-        ## Install/setup prerequisites
-        case '${{ matrix.job.os }}' in
-          macos-latest) brew install coreutils ;; # needed for testing
-        esac
-
-        case '${{ matrix.job.os }}' in
-          ubuntu-latest)
-            # selinux and systemd headers needed to build tests
-            sudo apt-get -y update
-            sudo apt-get -y install libselinux1-dev libsystemd-dev
-            # pinky is a tool to show logged-in users from utmp, and gecos fields from /etc/passwd.
-            # In GitHub Action *nix VMs, no accounts log in, even the "runner" account that runs the commands, and "system boot" entry is missing.
-            # The account also has empty gecos fields.
-            # To work around these issues for pinky (and who) tests, we create a fake utmp file with a
-            # system boot entry and a login entry for the GH runner account.
-            FAKE_UTMP_2='[2] [00000] [~~  ] [reboot] [~   ] [6.0.0-test] [0.0.0.0] [2022-02-22T22:11:22,222222+00:00]'
-            FAKE_UTMP_7='[7] [999999] [tty2] [runner] [tty2] [          ] [0.0.0.0] [2022-02-22T22:22:22,222222+00:00]'
-            (echo "$FAKE_UTMP_2" ; echo "$FAKE_UTMP_7") | sudo utmpdump -r -o /var/run/utmp
-            # ... and add a full name to each account with a gecos field but no full name.
-            sudo sed -i 's/:,/:runner name,/' /etc/passwd
-            # We also create a couple optional files pinky looks for
-            touch /home/runner/.project
-            echo "foo" > /home/runner/.plan
-            # add user with digital username for testing with issue #7787
-            echo 200:x:2000:2000::/home/200:/bin/bash | sudo tee -a /etc/passwd
-            echo 200:x:2000: | sudo tee -a /etc/group
-            ;;
-        esac
-
-        ## Install the llvm-tools component to get access to `llvm-profdata`
-        rustup component add llvm-tools
-
-    - name: Run test and coverage
-      id: run_test_cov
-      run: |
-        outputs() { step_id="${{ github.action }}"; for var in "$@" ; do echo steps.${step_id}.outputs.${var}="${!var}"; echo "${var}=${!var}" >> $GITHUB_OUTPUT; done; }
-
-        # Run the coverage script
-        ./util/build-run-test-coverage-linux.sh
-
-        outputs REPORT_FILE
-      env:
-        COVERAGE_DIR: ${{ github.workspace }}/coverage
-        FEATURES_OPTION: ${{ steps.vars.outputs.CARGO_FEATURES_OPTION }}
-        # RUSTUP_TOOLCHAIN: ${{ steps.vars.outputs.TOOLCHAIN }}
-
-    - name: Print signal handler debug log
-      if: ${{ !cancelled() }}
-      run: |
-        echo "=== Signal handler debug log ==="
-        cat /tmp/dd_signal_debug.log 2>/dev/null || echo "No debug log found"
-
-    - name: Upload coverage results (to Codecov.io)
-      uses: codecov/codecov-action@v5
-      with:
-        token: ${{ secrets.CODECOV_TOKEN }}
-        files: ${{ steps.run_test_cov.outputs.report }}
-        ## flags: IntegrationTests, UnitTests, ${{ steps.vars.outputs.CODECOV_FLAGS }}
-        flags: ${{ steps.vars.outputs.CODECOV_FLAGS }}
-        name: codecov-umbrella
-        fail_ci_if_error: false
-    - name: Upload test results to Codecov
-      if: ${{ !cancelled() }}
-      uses: codecov/codecov-action@v5
-      with:
-        token: ${{ secrets.CODECOV_TOKEN }}
-        report_type: test_results
-        files: target/nextest/coverage/junit.xml
-        disable_search: true
-        flags: coverage,${{ matrix.job.os }}
-        fail_ci_if_error: false
+        for f in shuf sleep sort
+        do
+          echo "Building and testing $f"
+          cargo test -p "uu_$f" -p coreutils --features=$f --no-default-features
+        done
