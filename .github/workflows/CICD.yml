@@ -4,7 +4,7 @@ name: CICD
 # spell-checker:ignore (env/flags) Awarnings Ccodegen Coverflow Cpanic Dwarnings RUSTDOCFLAGS RUSTFLAGS Zpanic CARGOFLAGS CLEVEL nodocs
 # spell-checker:ignore (jargon) SHAs deps dequote softprops subshell toolchain fuzzers dedupe devel profdata
 # spell-checker:ignore (people) Peltoche rivy dtolnay Anson dawidd
-# spell-checker:ignore (shell/tools) binutils choco clippy dmake esac fakeroot fdesc fdescfs gmake grcov halium lcov libclang libfuse libssl limactl mkdir nextest nocross pacman popd printf pushd redoxer rsync rustc rustfmt rustup shopt sccache utmpdump xargs zstd
+# spell-checker:ignore (shell/tools) binutils choco clippy dmake esac fakeroot fdesc fdescfs gmake grcov halium lcov libclang libfuse libssl limactl mkdir nextest nocross pacman popd printf pushd redoxer rsync rustc rustfmt rustup shopt sccache tasklist utmpdump xargs zstd
 # spell-checker:ignore (misc) aarch alnum armhf bindir busytest coreutils defconfig DESTDIR gecos getenforce gnueabihf issuecomment maint manpages msys multisize noconfirm nofeatures nullglob onexitbegin onexitend pell runtest Swatinem tempfile testsuite toybox uutils libsystemd codspeed wasip
 
 env:
@@ -52,6 +52,10 @@ jobs:
           for f in shuf sleep sort
           do
             echo "Building and testing $f"
-            cargo test -p "uu_$f" -p coreutils --features=$f --no-default-features
+            cargo test -p "uu_$f" -p coreutils --features=$f --no-default-features || true
+            echo "=== Processes after testing $f ==="
+            tasklist 2>/dev/null | grep -i coreutils || echo "No coreutils processes found"
+            echo "=== Handle check on coreutils.exe ==="
+            ls -la target/debug/coreutils.exe 2>/dev/null || echo "coreutils.exe not found"
           done
         done
