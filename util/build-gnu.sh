@@ -109,7 +109,7 @@ for binary in $(./build-aux/gen-lists-of-programs.sh --list-progs); do
     test -f "${bin_path}" || cp -v /usr/bin/false "${bin_path}"
 done
 
-# Always update the PATH to test the uutils coreutils instead of the GNU coreutils
+# Always update the PATH in tests/local.mk to test the uutils coreutils instead of the GNU coreutils
 # This ensures the correct path is used even if the repository was moved or rebuilt in a different location
 sed -i "s/^[[:blank:]]*PATH=.*/  PATH='${UU_BUILD_DIR//\//\\/}\$(PATH_SEPARATOR)'\"\$\$PATH\" \\\/" tests/local.mk
 
@@ -163,6 +163,12 @@ fi
 # and Makefile newer than Makefile.in, so make won't re-run
 # automake or config.status and undo our edits.
 touch Makefile.in Makefile
+
+# Also patch the Makefile's own PATH (it has an inlined copy from tests/local.mk
+# that still points to the GNU src/ directory)
+sed -i "s/^[[:blank:]]*PATH=.*/  PATH='${UU_BUILD_DIR//\//\\/}\$(PATH_SEPARATOR)'\"\$\$PATH\" \\\/" Makefile
+# Prevent make check from rebuilding the GNU binaries over the uutils ones
+sed -i 's/^check-am: all-am/check-am:/' Makefile
 
 grep -rl 'path_prepend_' tests/* | xargs -r "${SED}" -i 's| path_prepend_ ./src||'
 # path_prepend_ sets $abs_path_dir_: set it manually instead.
