@@ -530,6 +530,13 @@ fn value_too_large(option_message: &str, raw: &str) -> String {
     )
 }
 
+fn invalid_zero_value(option_message: &str) -> String {
+    format!(
+        "{option_message}: '0': {}",
+        strip_errno(&io::Error::from_raw_os_error(uucore::libc::ERANGE))
+    )
+}
+
 fn parse_usize(
     matches: &ArgMatches,
     opt: &str,
@@ -545,12 +552,9 @@ fn parse_usize(
             Err(e) if *e.kind() == IntErrorKind::PosOverflow => Err(PrError::EncounteredErrors {
                 msg: value_too_large(too_large_error_message, raw),
             }),
-            Err(_) => {
-                let option = format!("-{opt}");
-                Err(PrError::EncounteredErrors {
-                    msg: format!("invalid -{option} argument {}", raw.quote()),
-                })
-            }
+            Err(_) => Err(PrError::EncounteredErrors {
+                msg: format!("{too_large_error_message}: {}", raw.quote()),
+            }),
         }
     })
 }
@@ -806,7 +810,7 @@ fn build_options(
 
         match parsed_value {
             Ok(0) => Err(PrError::EncounteredErrors {
-                msg: "invalid --pages argument '0'".to_string(),
+                msg: format!("invalid page range {}", unparsed_value.quote()),
             }),
             Ok(res) => Ok(res),
             Err(e) => Err(e),
@@ -859,7 +863,7 @@ fn build_options(
 
     if page_length == 0 {
         return Err(PrError::EncounteredErrors {
-            msg: "invalid --length argument '0'".to_string(),
+            msg: invalid_zero_value("'-l PAGE_LENGTH' invalid number of lines"),
         });
     }
 
@@ -910,7 +914,7 @@ fn build_options(
 
     if column_width == 0 {
         return Err(PrError::EncounteredErrors {
-            msg: "invalid --width argument '0'".to_string(),
+            msg: invalid_zero_value("'-w PAGE_WIDTH' invalid number of characters"),
         });
     }
 
@@ -929,7 +933,7 @@ fn build_options(
 
     if page_width == Some(0) {
         return Err(PrError::EncounteredErrors {
-            msg: "invalid --page-width argument '0'".to_string(),
+            msg: invalid_zero_value("'-W PAGE_WIDTH' invalid number of characters"),
         });
     }
 
@@ -951,7 +955,7 @@ fn build_options(
     let start_column_option = match res {
         Some(Ok(0)) => {
             return Err(PrError::EncounteredErrors {
-                msg: "invalid --columns argument '0'".to_string(),
+                msg: invalid_zero_value("invalid number of columns"),
             });
         }
         Some(res) => Some(res?),
@@ -964,7 +968,7 @@ fn build_options(
         match parse_usize(matches, options::COLUMNS, "invalid number of columns") {
             Some(Ok(0)) => {
                 return Err(PrError::EncounteredErrors {
-                    msg: "invalid --columns argument '0'".to_string(),
+                    msg: invalid_zero_value("invalid number of columns"),
                 });
             }
             Some(res) => Some(res?),

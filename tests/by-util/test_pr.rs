@@ -210,7 +210,7 @@ fn test_with_valid_page_ranges() {
     scenario
         .args(&["--pages=20:5", test_file_path])
         .fails()
-        .stderr_only("pr: invalid --pages argument '20:5'\n");
+        .stderr_only("pr: invalid page range '20:5'\n");
     new_ucmd!()
         .args(&["--pages=1:5", test_file_path])
         .succeeds();
@@ -226,7 +226,7 @@ fn test_with_valid_page_ranges() {
     new_ucmd!()
         .args(&["--pages=5:1", test_file_path])
         .fails()
-        .stderr_only("pr: invalid --pages argument '5:1'\n");
+        .stderr_only("pr: invalid page range '5:1'\n");
 }
 
 #[test]
@@ -1159,7 +1159,7 @@ fn test_zero_columns() {
     new_ucmd!()
         .arg("--columns=0")
         .fails_with_code(1)
-        .stderr_contains("pr: invalid --columns argument '0'");
+        .stderr_contains("pr: invalid number of columns: '0':");
 }
 
 #[test]
@@ -1167,7 +1167,7 @@ fn test_zero_columns_shortcut() {
     new_ucmd!()
         .arg("-0")
         .fails_with_code(1)
-        .stderr_contains("pr: invalid --columns argument '0'");
+        .stderr_contains("pr: invalid number of columns: '0':");
 }
 
 #[test]
@@ -1240,7 +1240,7 @@ fn test_zero_column_width() {
     new_ucmd!()
         .args(&["-w", "0"])
         .fails_with_code(1)
-        .stderr_is("pr: invalid --width argument '0'\n");
+        .stderr_contains("pr: '-w PAGE_WIDTH' invalid number of characters: '0':");
 }
 
 #[test]
@@ -1248,7 +1248,7 @@ fn test_zero_page_width() {
     new_ucmd!()
         .args(&["-W", "0"])
         .fails_with_code(1)
-        .stderr_is("pr: invalid --page-width argument '0'\n");
+        .stderr_contains("pr: '-W PAGE_WIDTH' invalid number of characters: '0':");
 }
 
 #[test]
@@ -1284,7 +1284,12 @@ fn test_zero_length() {
     new_ucmd!()
         .args(&["-l", "0"])
         .fails_with_code(1)
-        .stderr_is("pr: invalid --length argument '0'\n");
+        .stderr_contains("pr: '-l PAGE_LENGTH' invalid number of lines: '0':");
+
+    new_ucmd!()
+        .args(&["-l", "abc"])
+        .fails_with_code(1)
+        .stderr_is("pr: '-l PAGE_LENGTH' invalid number of lines: 'abc'\n");
 }
 
 #[test]
@@ -1292,7 +1297,17 @@ fn test_zero_pages() {
     new_ucmd!()
         .args(&["--pages", "0"])
         .fails_with_code(1)
-        .stderr_is("pr: invalid --pages argument '0'\n");
+        .stderr_is("pr: invalid page range '0'\n");
+
+    new_ucmd!()
+        .args(&["--pages", "0:1"])
+        .fails_with_code(1)
+        .stderr_is("pr: invalid page range '0:1'\n");
+
+    new_ucmd!()
+        .args(&["--pages", "1:0"])
+        .fails_with_code(1)
+        .stderr_is("pr: invalid page range '1:0'\n");
 }
 
 #[test]
