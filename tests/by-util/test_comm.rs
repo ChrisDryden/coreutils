@@ -5,6 +5,7 @@
 
 // spell-checker:ignore (words) defaultcheck nocheck helpb helpz nwordb nwordwordz wordtotal
 
+use std::time::Duration;
 use uutests::new_ucmd;
 use uutests::util::TestScenario;
 #[cfg(unix)]
@@ -28,6 +29,21 @@ fn ab_no_args() {
         .args(&["a", "b"])
         .succeeds()
         .stdout_is("a\n\tb\n\t\tz\n");
+}
+
+#[test]
+fn comm_stdin_as_both_inputs() {
+    let scene = TestScenario::new(util_name!());
+
+    // This matches `seq 9 | sed 'n;n;p'` from the GNU integration test:
+    // each third line is duplicated so the two inputs can advance in turn.
+    scene
+        .ucmd()
+        .args(&["-", "-"])
+        .pipe_in("1\n2\n3\n3\n4\n5\n6\n6\n7\n8\n9\n9\n")
+        .timeout(Duration::from_secs(10))
+        .succeeds()
+        .stdout_is("1\n\t2\n\t\t3\n4\n\t5\n\t\t6\n7\n\t8\n\t\t9\n");
 }
 
 #[test]

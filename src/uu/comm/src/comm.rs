@@ -78,13 +78,13 @@ fn line_cmp(a: &[u8], b: &[u8], use_locale: bool) -> Ordering {
 }
 
 enum Input {
-    Stdin(StdinLock<'static>),
+    Stdin,
     FileIn(BufReader<File>),
 }
 
 impl Input {
     fn stdin() -> Self {
-        Self::Stdin(stdin().lock())
+        Self::Stdin
     }
 
     fn from_file(f: File) -> Self {
@@ -102,11 +102,18 @@ impl LineReader {
         Self { line_ending, input }
     }
 
-    fn read_line(&mut self, buf: &mut Vec<u8>) -> io::Result<usize> {
+    fn read_line(
+        &mut self,
+        buf: &mut Vec<u8>,
+        stdin: &mut Option<StdinLock<'static>>,
+    ) -> io::Result<usize> {
         let line_ending = self.line_ending.into();
 
         let result = match &mut self.input {
-            Input::Stdin(r) => r.read_until(line_ending, buf),
+            Input::Stdin => stdin
+                .as_mut()
+                .expect("stdin lock is present when an input is stdin")
+                .read_until(line_ending, buf),
             Input::FileIn(r) => r.read_until(line_ending, buf),
         };
 
@@ -168,6 +175,7 @@ fn write_line_with_delimiter<W: Write>(writer: &mut W, delim: &[u8], line: &[u8]
 fn comm(
     a: &mut LineReader,
     b: &mut LineReader,
+    mut stdin: Option<StdinLock<'static>>,
     filename1: &OsString,
     filename2: &OsString,
     delim: &str,
@@ -183,11 +191,11 @@ fn comm(
 
     let ra = &mut Vec::new();
     let mut na = a
-        .read_line(ra)
+        .read_line(ra, &mut stdin)
         .map_err_context(|| filename1.maybe_quote().to_string())?;
     let rb = &mut Vec::new();
     let mut nb = b
-        .read_line(rb)
+        .read_line(rb, &mut stdin)
         .map_err_context(|| filename2.maybe_quote().to_string())?;
 
     let mut total_col_1 = 0;
@@ -231,7 +239,7 @@ fn comm(
                 }
                 ra.clear();
                 na = a
-                    .read_line(ra)
+                    .read_line(ra, &mut stdin)
                     .map_err_context(|| filename1.maybe_quote().to_string())?;
                 total_col_1 += 1;
             }
@@ -244,7 +252,7 @@ fn comm(
                 }
                 rb.clear();
                 nb = b
-                    .read_line(rb)
+                    .read_line(rb, &mut stdin)
                     .map_err_context(|| filename2.maybe_quote().to_string())?;
                 total_col_2 += 1;
             }
@@ -261,10 +269,10 @@ fn comm(
                 ra.clear();
                 rb.clear();
                 na = a
-                    .read_line(ra)
+                    .read_line(ra, &mut stdin)
                     .map_err_context(|| filename1.maybe_quote().to_string())?;
                 nb = b
-                    .read_line(rb)
+                    .read_line(rb, &mut stdin)
                     .map_err_context(|| filename2.maybe_quote().to_string())?;
                 total_col_3 += 1;
             }
@@ -355,7 +363,10 @@ pub fn uumain(args: impl uucore::Args) -> UResult<()> {
         delim => delim,
     };
 
-    comm(&mut f1, &mut f2, filename1, filename2, delim, &matches)
+    let stdin_lock = (filename1 == "-" || filename2 == "-").then(|| stdin().lock());
+    comm(
+        &mut f1, &mut f2, stdin_lock, filename1, filename2, delim, &matches,
+    )
 }
 
 pub fn uu_app() -> Command {
